@@ -1,5 +1,19 @@
 import { spawn } from "node:child_process";
-import { delimiter } from "node:path";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import { delimiter, join } from "node:path";
+
+/**
+ * A converters directory plus each of its immediate subdirectories (e.g. the
+ * ImageMagick portable folder) — the entries to prepend to the ConvertX
+ * child's PATH. Returns [] if the directory does not exist.
+ */
+export function converterPathEntries(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  const subdirs = readdirSync(dir)
+    .map((entry) => join(dir, entry))
+    .filter((path) => statSync(path).isDirectory());
+  return [dir, ...subdirs];
+}
 
 export interface ConvertxEnvOptions {
   port: number;

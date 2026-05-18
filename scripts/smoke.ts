@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { buildConvertxEnv, startConvertX } from "../src/bun/convertx";
+import { buildConvertxEnv, converterPathEntries, startConvertX } from "../src/bun/convertx";
 import { waitForHealth } from "../src/bun/health";
 import { ensureDataJunction, getAppPaths } from "../src/bun/paths";
 import { findFreePort } from "../src/bun/port";
@@ -14,14 +14,6 @@ const CONVERTERS_DIR = join(PROJECT_ROOT, "vendor", "converters", "win");
 // accepts it (a hand-rolled/truncated PNG gets rejected as "not enough image data").
 const TEST_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACAQAAAABazTCJAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAACYktHRAAB3YoTpAAAAAd0SU1FB+oFEhYUIESQqn8AAAAldEVYdGRhdGU6Y3JlYXRlADIwMjYtMDUtMThUMjI6MjA6MzIrMDA6MDB0HDspAAAAJXRFWHRkYXRlOm1vZGlmeQAyMDI2LTA1LTE4VDIyOjIwOjMyKzAwOjAwBUGDlQAAACh0RVh0ZGF0ZTp0aW1lc3RhbXAAMjAyNi0wNS0xOFQyMjoyMDozMiswMDowMFJUokoAAAAMSURBVAjXYzjAcAAAAwQBgcU7oqkAAAAASUVORK5CYII=";
-
-function converterPathEntries(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  const subdirs = readdirSync(dir)
-    .map((e) => join(dir, e))
-    .filter((p) => statSync(p).isDirectory());
-  return [dir, ...subdirs];
-}
 
 /** Parse a cookie value out of a set-cookie header list. */
 function cookieValue(setCookies: string[], name: string): string {

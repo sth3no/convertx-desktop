@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BrowserWindow } from "electrobun/bun";
-import { buildConvertxEnv, startConvertX } from "./convertx";
+import { buildConvertxEnv, converterPathEntries, startConvertX } from "./convertx";
 import { waitForHealth } from "./health";
 import { ensureDataJunction, getAppPaths } from "./paths";
 import { findFreePort } from "./port";
@@ -13,19 +13,13 @@ const CONVERTERS_DIR = join(PROJECT_ROOT, "vendor", "converters", "win");
 
 /** Read the persisted JWT secret, or generate and persist one on first run. */
 function loadJwtSecret(file: string): string {
-  if (existsSync(file)) return readFileSync(file, "utf8").trim();
+  if (existsSync(file)) {
+    const existing = readFileSync(file, "utf8").trim();
+    if (existing) return existing;
+  }
   const secret = randomUUID();
   writeFileSync(file, secret, "utf8");
   return secret;
-}
-
-/** The converters dir plus each immediate subdir (e.g. the ImageMagick folder). */
-function converterPathEntries(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  const subdirs = readdirSync(dir)
-    .map((entry) => join(dir, entry))
-    .filter((path) => statSync(path).isDirectory());
-  return [dir, ...subdirs];
 }
 
 function errorPage(message: string): string {
