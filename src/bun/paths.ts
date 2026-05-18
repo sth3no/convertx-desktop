@@ -25,6 +25,10 @@ export function getAppPaths(
  * Make `linkPath` a Windows directory junction onto `dataDir`, so ConvertX's
  * cwd-relative `./data` lands in the OS app-data dir. Idempotent: if `linkPath`
  * already exists it is left as-is.
+ *
+ * Precondition: the parent directory of `linkPath` must already exist — the
+ * caller is responsible for creating it (the supervisor only calls this once
+ * ConvertX is vendored, so `vendor/convertx/` exists).
  */
 export function ensureDataJunction(linkPath: string, dataDir: string): void {
   if (existsSync(linkPath)) return;
