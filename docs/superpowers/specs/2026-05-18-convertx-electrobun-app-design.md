@@ -256,7 +256,11 @@ All persistent state lives under `%APPDATA%\ConvertX-Electrobun\`:
 - **ConvertX fails to start / times out:** `waitForHealth()` rejects; the
   supervisor shows the captured stderr via `webview.loadHTML(...)` instead of a
   blank or stuck splash.
-- **Child cleanup:** the ConvertX child is killed on supervisor exit.
+- **Child cleanup:** the ConvertX child is killed on supervisor exit, via
+  `process` `exit`/`SIGINT`/`SIGTERM` handlers. Known limitation for this pass:
+  this is a single-process `kill`, not a process-tree kill — a converter
+  grandchild running mid-conversion, or a teardown path that bypasses those
+  signals, can leave a stray process. Tree-kill / an `onExit` hook is a follow-up.
 - **Missing converters:** surfaced per-conversion by ConvertX (see §8).
 
 ## 12. Testing strategy
