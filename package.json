@@ -1,0 +1,19 @@
+{
+  "name": "convertx-electrobun",
+  "version": "0.1.0",
+  "private": true,
+  "module": "src/bun/index.ts",
+  "type": "module",
+  "scripts": {
+    "dev": "electrobun dev",
+    "build": "electrobun build",
+    "test": "bun test src/bun",
+    "setup": "bun run scripts/setup-convertx.ts && bun run scripts/fetch-converters.ts"
+  },
+  "dependencies": {
+    "electrobun": "^1.18.1"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
