@@ -68,7 +68,7 @@ async function main(): Promise<void> {
     const cookie = `auth=${auth}; jobId=${jobId}`;
     console.log(`Session established (jobId=${jobId}).`);
 
-    // 2. POST /upload — send a 1x1 PNG.
+    // 2. POST /upload — send a 2x2 PNG.
     const png = Buffer.from(TEST_PNG_BASE64, "base64");
     const uploadForm = new FormData();
     uploadForm.append("file", new File([png], "test.png", { type: "image/png" }));
