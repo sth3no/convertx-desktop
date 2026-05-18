@@ -101,7 +101,15 @@ async function resolveGithubAsset(repo: string, match: RegExp): Promise<string> 
 async function download(url: string, dest: string): Promise<void> {
   const res = await fetch(url, { redirect: "follow" });
   if (!res.ok) throw new Error(`Download ${res.status} for ${url}`);
-  await Bun.write(dest, await res.arrayBuffer());
+  const contentType = res.headers.get("content-type") ?? "";
+  if (contentType.includes("text/html")) {
+    throw new Error(`Download for ${url} returned an HTML page, not a file`);
+  }
+  const bytes = await res.arrayBuffer();
+  if (bytes.byteLength < 10_000) {
+    throw new Error(`Download for ${url} is too small (${bytes.byteLength} bytes) — not a real archive`);
+  }
+  await Bun.write(dest, bytes);
 }
 
 /** Recursively find the first file named `name` under `dir`. */
@@ -119,8 +127,11 @@ function findFile(dir: string, name: string): string | undefined {
 }
 
 function unzip(zipPath: string, destDir: string): void {
-  // Windows 10/11 ships bsdtar as tar.exe, which extracts .zip archives.
-  const result = spawnSync("tar", ["-xf", zipPath, "-C", destDir], { stdio: "inherit" });
+  // Use the system bsdtar (libarchive) by absolute path — it extracts both .zip
+  // and .7z. A bare "tar" may resolve to Git-for-Windows' GNU tar, which cannot.
+  const systemTar = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+  const tar = existsSync(systemTar) ? systemTar : "tar";
+  const result = spawnSync(tar, ["-xf", zipPath, "-C", destDir], { stdio: "inherit" });
   if (result.status !== 0) throw new Error(`tar failed to extract ${zipPath}`);
 }
 
