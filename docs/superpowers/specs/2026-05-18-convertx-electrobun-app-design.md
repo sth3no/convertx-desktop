@@ -1,291 +1,307 @@
 # ConvertX → Electrobun Desktop App — Design
 
 - **Date:** 2026-05-18
-- **Status:** Approved (design)
+- **Status:** Approved (design) — revised after inspecting ConvertX source and Electrobun tooling
 - **Target platform:** Windows 11 (cross-platform kept possible, not built this pass)
+
+> **Revision note:** §15 of the original draft listed items to verify against
+> ConvertX's source. They were verified. The findings *simplified* the design:
+> ConvertX needs **zero source patches** (auth is handled by existing env vars),
+> there is **no first-run account seeding**, and the curated converter set was
+> corrected to ConvertX's actual converter tools. Those corrections are folded in
+> below.
 
 ## 1. Goal
 
 Turn ConvertX — a self-hosted, web-based file converter — into a native Windows
 desktop application using Electrobun. This pass delivers a **runnable dev app**:
 it launches through the Electrobun dev workflow as a native window, boots ConvertX
-behind it, opens already authenticated, and performs real conversions using a
-curated set of bundled converter binaries.
+behind it, opens straight into the converter (no login), and performs real
+conversions using a curated set of bundled converter binaries.
 
 ## 2. Background
 
-### ConvertX (github.com/C4illin/ConvertX)
+### ConvertX (github.com/C4illin/ConvertX, v0.17.0)
 
 A self-hosted file converter. Stack: TypeScript on the **Bun** runtime, **Elysia**
-web framework, server-rendered JSX UI (`@kitajs/html`), **SQLite** database, JWT
-auth. It performs conversions by shelling out to ~25 external CLI tools and is
-normally shipped as a multi-GB Debian Docker image.
+web framework, server-rendered JSX UI (`@kitajs/html`), **SQLite** (`bun:sqlite`),
+JWT auth (`@elysiajs/jwt`). It runs conversions by shelling out (`execFile`) to
+external CLI tools. Normally shipped as a multi-GB Debian Docker image.
 
-Confirmed details (from source inspection):
+Confirmed from source:
 
-- Server entry is `src/index.tsx`; it listens on `process.env.PORT || 3000`.
-- All state is written to a **relative** `./data/` directory
-  (`./data/uploads/`, `./data/output/`, plus the SQLite database file).
-- Authentication is implemented in a `user` Elysia plugin (`.use(user)`).
-- Environment variables it reads: `PORT`, `NODE_ENV`, `WEBROOT`,
-  `AUTO_DELETE_EVERY_N_HOURS`, `ACCOUNT_REGISTRATION`, `JWT_SECRET`.
-- It builds with its own toolchain (TypeScript compile + Tailwind CSS); the
-  production entry is `dist/src/index.js`.
+- Server entry `src/index.tsx`; listens on `process.env.PORT || 3000`.
+- Bun runs `src/index.tsx` directly — `package.json` `bun-create.start` is
+  `bun run src/index.tsx`. No build step is required to run it.
+- All state is written to a **cwd-relative** `./data/` directory: SQLite DB
+  `./data/mydb.sqlite`, `./data/uploads/`, `./data/output/`.
+- Static assets are served by `@elysiajs/static` from a **cwd-relative** `public/`
+  directory. When `NODE_ENV !== "production"`, the Tailwind CSS file is generated
+  at runtime from the cwd-relative `./src/main.css`.
+- **Auth:** an Elysia `auth` macro guards most routes. ConvertX already supports
+  an unauthenticated mode via two env vars (see §9) — **no patch is needed.**
+- Env vars it reads: `PORT`, `NODE_ENV`, `WEBROOT`, `JWT_SECRET`,
+  `ACCOUNT_REGISTRATION`, `ALLOW_UNAUTHENTICATED`, `UNAUTHENTICATED_USER_SHARING`,
+  `HTTP_ALLOWED`, `AUTO_DELETE_EVERY_N_HOURS`, `HIDE_HISTORY`, `MAX_CONVERT_PROCESS`.
+- Converters are registered **statically** — ConvertX always offers every
+  converter/format. It does **not** hide converters whose tool is missing; an
+  unavailable tool simply makes that conversion fail at runtime (the converter
+  catches the error and returns `"Failed, check logs"`).
 
-### Electrobun (github.com/blackboardsh/electrobun)
+### Electrobun (github.com/blackboardsh/electrobun, v1.18.1)
 
-A Bun-based cross-platform desktop framework. Supports Windows 11+, macOS 14+,
-Ubuntu 22.04+. Scaffolded with `npx electrobun init`, configured via
-`electrobun.config.ts`, bundles the Bun runtime (~14 MB baseline). A
-`BrowserWindow` can load bundled `views://` assets **or any URL**, including a
-local HTTP server. Main process and webviews communicate over typed RPC.
+A Bun-based cross-platform desktop framework. Verified on this machine:
+
+- Installs cleanly on Windows (`bun add electrobun`). On first CLI run it
+  downloads a ~50 MB `win-x64` core (its own bundled `bun.exe`, `launcher.exe`,
+  `WebView2Loader.dll`, etc.). Windows uses the system **WebView2** runtime.
+- App layout: `src/bun/index.ts` (main process), `src/mainview/` (webview
+  assets), `electrobun.config.ts` (config). Dev command: `electrobun dev`.
+- `import { BrowserWindow } from "electrobun/bun"` → `new BrowserWindow({ title,
+  url, frame: { width, height, x, y } })`. `win.webview.loadURL(url)` loads any
+  URL including `http://127.0.0.1:…`; `win.webview.loadHTML(html)` loads inline
+  HTML. The main process is a normal Bun process — `Bun.spawn` and `node:*` work.
 
 ## 3. Decisions (locked)
 
 | Decision | Choice |
 |---|---|
-| Converter binaries | Bundle a **curated set**: FFmpeg, ImageMagick, Pandoc, Ghostscript, Poppler, resvg, potrace, vtracer. Exclude the multi-GB tools (LibreOffice, Calibre, TeXLive). |
-| Scope | **Runnable dev app** — launches via the Electrobun dev workflow, verified with a real conversion. No packaged installer this pass. |
-| Auth / first-run | **Auto-login** — first run seeds a local account; the window always opens authenticated, no login screen. |
+| Converter binaries | Bundle a **curated set**: FFmpeg, ImageMagick, Pandoc, dasel, resvg, potrace, vtracer — ConvertX's converter tools that have simple portable Windows binaries. Excludes the heavy tools (LibreOffice, Calibre, TeXLive, Inkscape, …). |
+| Scope | **Runnable dev app** — launches via `electrobun dev`, verified with a real conversion. No packaged installer this pass. |
+| Auth / first-run | **No login** — the window opens straight into the converter. Achieved with ConvertX's built-in env vars; no source patch. |
 | Process model | **Approach A — subprocess supervisor** (see §5). |
 
 ## 4. Architecture overview
 
-This directory (`C:\Users\PC\Projects\ConvertX`) becomes the **Electrobun app**.
-ConvertX is vendored inside it as a near-pristine clone.
+This directory (`C:\Users\PC\Projects\ConvertX`) is the **Electrobun app**.
+ConvertX is vendored inside it, **completely unmodified**.
 
 ```
 ConvertX/
 ├─ electrobun.config.ts          app metadata + build config
-├─ package.json                  Electrobun app dependencies
+├─ package.json                  Electrobun app dependencies + scripts
 ├─ tsconfig.json
 ├─ .gitignore
 ├─ scripts/
-│  ├─ setup.ts                   clone + build ConvertX, fetch converters
-│  └─ fetch-converters.ts        download curated Windows binaries
+│  ├─ setup-convertx.ts           clone + `bun install` ConvertX
+│  ├─ fetch-converters.ts         download curated Windows binaries
+│  └─ smoke.ts                    drive ConvertX over HTTP to verify conversions
 ├─ src/
-│  ├─ bun/                       main process (the supervisor)
-│  │  ├─ index.ts                entry: orchestrate boot, create window
-│  │  ├─ paths.ts                app-data directory resolution
-│  │  ├─ port.ts                 free TCP port allocation
-│  │  ├─ health.ts               poll ConvertX URL until ready
-│  │  ├─ convertx-process.ts     spawn + teardown of the ConvertX child
-│  │  └─ bootstrap.ts            first-run JWT secret + account seed
+│  ├─ bun/                        main process (the supervisor)
+│  │  ├─ index.ts                 entry: orchestrate boot, own the window
+│  │  ├─ paths.ts                 app-data dir resolution + data junction
+│  │  ├─ port.ts                  free TCP port allocation
+│  │  ├─ health.ts                poll ConvertX URL until ready
+│  │  └─ convertx.ts              ConvertX child env assembly + spawn/teardown
 │  └─ mainview/
-│     ├─ index.html              splash / loading + error view
-│     └─ index.ts                splash view script (RPC target)
-├─ vendor/
-│  ├─ convertx/                  git clone of C4illin/ConvertX
-│  └─ converters/win/            bundled curated Windows binaries
-└─ docs/superpowers/specs/       this document
+│     ├─ index.html               splash shown while ConvertX boots
+│     ├─ index.css
+│     └─ index.ts                 splash view entrypoint (minimal)
+└─ vendor/
+   ├─ convertx/                   git clone of C4illin/ConvertX (UNMODIFIED)
+   └─ converters/win/             bundled curated Windows binaries
 ```
 
-The Electrobun app and ConvertX stay **decoupled**: ConvertX keeps its own
-`package.json`, dependencies, and build pipeline. The Electrobun app treats
-ConvertX as an external process it supervises.
+`vendor/convertx/`, `vendor/converters/`, and the OS app-data directory are
+git-ignored — they are populated by the setup scripts, not committed.
 
 ## 5. Approach: subprocess supervisor
 
-Electrobun's Bun main process acts as a **thin supervisor**. It spawns ConvertX
-as a separate child Bun process and points a `BrowserWindow` at it.
+Electrobun's Bun main process is a **thin supervisor**. It spawns ConvertX as a
+separate child Bun process and points a `BrowserWindow` at it.
 
 **Why this over the alternatives:**
 
-- **A — Subprocess supervisor (chosen).** ConvertX builds and runs exactly as
-  upstream intends. Crashes are isolated from the window process. Only one small
-  ConvertX source patch is needed; port and data location are controlled via
-  environment and working directory. Updating ConvertX later is a re-clone.
-- **B — In-process embed** (import ConvertX's Elysia app into the Electrobun
-  process). Rejected: ConvertX's Tailwind + JSX + static-serving build would have
-  to be merged into Electrobun's `Bun.build` config, dependency versions could
-  collide, and a ConvertX crash would take the window down with it.
-- **C — Thin client** (webview pointed at a Docker-hosted ConvertX). Rejected
-  when the curated-bundle converter strategy was chosen over running Docker.
+- **A — Subprocess supervisor (chosen).** ConvertX runs exactly as upstream
+  intends, as its own process, fully unmodified. Crashes are isolated from the
+  window. Updating ConvertX is a clean re-clone.
+- **B — In-process embed.** Rejected: merging ConvertX's Tailwind/JSX/static
+  pipeline into Electrobun's build is fragile, dependency versions could collide,
+  and a ConvertX crash would take the window down with it.
+- **C — Thin client (Docker).** Rejected when the curated-bundle strategy was
+  chosen over running Docker.
 
 ## 6. Components
 
 Each component is a small, independently testable unit.
 
-### 6.1 `src/bun/paths.ts` — app-data paths
-- **Purpose:** resolve and create the OS app-data directory tree.
-- **Interface:** `getAppPaths()` → `{ dataDir, jwtSecretFile, firstRunMarker }`.
-- **Behavior:** base directory is `%APPDATA%\ConvertX-Electrobun\` on Windows;
-  ensures it exists. ConvertX's child process uses `dataDir` as its working
-  directory so its relative `./data/` lands inside it.
-- **Depends on:** Node `os`/`path`/`fs`.
+### 6.1 `src/bun/paths.ts` — app-data paths + data junction
+- **Purpose:** resolve the OS app-data directory and link ConvertX's data into it.
+- **Interface:** `getAppPaths()` → `{ appDataDir, dataDir, jwtSecretFile }`;
+  `ensureDataJunction(convertxDir, dataDir)`.
+- **Behavior:** app-data base is `%APPDATA%\ConvertX-Electrobun\`. `ensureDataJunction`
+  makes `vendor/convertx/data` a Windows directory **junction** pointing at
+  `<appDataDir>\data`, so ConvertX's cwd-relative `./data` physically lands in
+  app-data with no ConvertX change. Idempotent; if `vendor/convertx/data` already
+  exists it is left as-is.
 
 ### 6.2 `src/bun/port.ts` — free port allocation
 - **Purpose:** find an open loopback TCP port.
 - **Interface:** `findFreePort()` → `Promise<number>`.
-- **Behavior:** binds an ephemeral port, reads it, releases it, returns the
-  number. Avoids collisions with anything already on 3000.
+- **Behavior:** binds an ephemeral port, reads it, releases it, returns it.
 
-### 6.3 `src/bun/convertx-process.ts` — ConvertX process manager
-- **Purpose:** start and stop the ConvertX child process.
-- **Interface:** `startConvertX(opts)` → `{ url, stop() }`.
-- **Behavior:** spawns `bun run vendor/convertx/dist/src/index.js` with:
-  - `cwd` = app-data `dataDir`
-  - env: `PORT`, `WEBROOT=/`, `NODE_ENV=production`, `JWT_SECRET`,
-    `DESKTOP_MODE=1`, and `PATH` prefixed with the bundled converter directories
-  - stdout/stderr captured for diagnostics.
-  On `stop()` it terminates the **whole child process tree** (no orphans).
-- **Depends on:** `Bun.spawn`, §6.1, §6.2.
-
-### 6.4 `src/bun/health.ts` — health check
+### 6.3 `src/bun/health.ts` — health check
 - **Purpose:** wait until ConvertX is serving.
 - **Interface:** `waitForHealth(url, timeoutMs)` → `Promise<void>`.
-- **Behavior:** polls `url` until it responds; rejects on timeout so the
-  supervisor can show an error instead of a blank window.
+- **Behavior:** polls `url` until it responds; rejects on timeout.
 
-### 6.5 `src/bun/bootstrap.ts` — first-run / auth bootstrap
-- **Purpose:** make the app open already authenticated.
-- **Interface:** `ensureFirstRun(url, paths)` → `Promise<void>` (idempotent).
-- **Behavior:** on first run, generate a stable random `JWT_SECRET` and persist
-  it to `jwtSecretFile`; seed one local account via ConvertX's first-account
-  setup route; write the first-run marker. On later runs it is a no-op.
+### 6.4 `src/bun/convertx.ts` — ConvertX process manager
+- **Purpose:** assemble the child environment and run/stop ConvertX.
+- **Interface:** `buildConvertxEnv(opts)` → env record (pure, testable);
+  `startConvertX(opts)` → `{ stop() }`.
+- **Behavior:** spawns ConvertX with the supervisor's bundled Bun
+  (`process.execPath`) running `vendor/convertx/src/index.tsx`, with:
+  - `cwd` = `vendor/convertx/` (so `public/` and `./src/main.css` resolve;
+    `./data` resolves through the junction to app-data)
+  - env: `PORT`, `JWT_SECRET`, `ALLOW_UNAUTHENTICATED=true`,
+    `UNAUTHENTICATED_USER_SHARING=true`, and `PATH` prefixed with
+    `vendor/converters/win`
+  - `NODE_ENV` left unset (non-production → Tailwind CSS generated at runtime,
+    no pre-build needed)
+  - stdout/stderr captured.
+  `stop()` terminates the child.
 
-### 6.6 ConvertX source patch — `DESKTOP_MODE`
-- **Purpose:** skip the login screen for the local desktop user.
-- **Change:** in ConvertX's `user` auth plugin, when `process.env.DESKTOP_MODE`
-  is set and the request has no valid session, resolve the seeded local account
-  instead of redirecting to `/login`.
-- **Constraint:** this is the **only** expected ConvertX source change. It is a
-  minimal, clearly-marked, tracked diff. The exact file/symbol is confirmed
-  against ConvertX's auth source during implementation.
-
-### 6.7 `src/bun/index.ts` — supervisor entry
+### 6.5 `src/bun/index.ts` — supervisor entry
 - **Purpose:** orchestrate boot and own the window.
 - **Behavior:** see §7. Creates the `BrowserWindow`, runs the startup sequence,
-  registers teardown on app quit / last-window-closed.
+  terminates the ConvertX child on exit.
 
-### 6.8 `src/mainview/` — splash view
-- **Purpose:** show a loading state while ConvertX boots; show a readable error
-  if boot fails.
-- **Behavior:** window opens at `views://mainview/index.html`. On success the
-  supervisor swaps the webview to the ConvertX URL. On failure the supervisor
-  sends the captured error over Electrobun RPC and the splash renders it.
+### 6.6 `src/mainview/` — splash view
+- **Purpose:** a loading screen while ConvertX boots.
+- **Behavior:** window opens at `views://mainview/index.html` (static
+  "Starting ConvertX…"). On success the supervisor calls
+  `webview.loadURL(<convertx-url>)`. On failure it calls `webview.loadHTML(...)`
+  with the captured error embedded.
 
-### 6.9 `scripts/fetch-converters.ts` — converter acquisition
-- **Purpose:** populate `vendor/converters/win/` with the curated binaries.
-- **Behavior:** downloads official Windows release builds of FFmpeg, ImageMagick,
-  Pandoc, Ghostscript, Poppler, resvg, potrace, vtracer; lays them out so each
-  tool is reachable on `PATH` **under the command name ConvertX invokes** (see
-  §8 — the Windows binary names differ from the Linux names ConvertX expects).
+### 6.7 `scripts/setup-convertx.ts` — vendor ConvertX
+- **Behavior:** clone `C4illin/ConvertX` into `vendor/convertx/` (skip if present)
+  and run `bun install` there. No build, no patching.
 
-### 6.10 `scripts/setup.ts` — one-shot project setup
-- **Purpose:** make the repo runnable from a fresh clone.
-- **Behavior:** clone `C4illin/ConvertX` into `vendor/convertx/`, run its
-  `bun install` and build, apply the `DESKTOP_MODE` patch, and run
-  `fetch-converters.ts`.
+### 6.8 `scripts/fetch-converters.ts` — converter acquisition
+- **Behavior:** download the curated tools (manifest-driven) into
+  `vendor/converters/win/`, each exposed as `<command>.exe` matching the name
+  ConvertX invokes (`ffmpeg`, `magick`, `pandoc`, `dasel`, `resvg`, `potrace`,
+  `vtracer`). Best-effort: prints a per-tool success/failure summary.
 
-### 6.11 `electrobun.config.ts` — build config
-- **Purpose:** Electrobun app metadata and build entrypoints.
-- **Contents:** `app.name = "ConvertX"`, an `app.identifier`, `build.bun.entrypoint
-  = src/bun/index.ts`, `build.views.mainview`, and `build.copy` for the splash
-  HTML. Structured so that packaging (`vendor/` resources, `asarUnpack`) can be
-  added later without restructuring.
+### 6.9 `scripts/smoke.ts` — HTTP smoke test
+- **Behavior:** drives a running ConvertX instance over HTTP (mimicking the
+  browser cookie flow) to convert sample files, asserting the output is produced.
+  Exercises the supervisor's env/PATH wiring without needing the GUI.
+
+### 6.10 `electrobun.config.ts` — build config
+- **Contents:** `app.{name,identifier,version}`, `build.bun.entrypoint =
+  src/bun/index.ts`, `build.views.mainview`, `build.copy` for the splash assets,
+  `runtime.exitOnLastWindowClosed = true`. The project root is injected for the
+  supervisor via a `build.bun.define` entry computed from the config's own
+  `import.meta.dir`.
 
 ## 7. Startup sequence
 
 1. Electrobun launches `src/bun/index.ts` (the supervisor).
 2. Open a `BrowserWindow` at `views://mainview/index.html` (splash).
-3. `getAppPaths()` resolves/creates the app-data directory.
-4. `findFreePort()` picks a free loopback port.
-5. Read or generate-and-persist `JWT_SECRET`.
-6. `startConvertX()` spawns the ConvertX child (env + `cwd` + converter `PATH`).
+3. Resolve app-data paths; ensure the `vendor/convertx/data` junction exists.
+4. Read or generate-and-persist `JWT_SECRET`.
+5. `findFreePort()` picks a free loopback port.
+6. `startConvertX()` spawns the ConvertX child (env + cwd + converter `PATH`).
 7. `waitForHealth()` polls until ConvertX responds, or times out.
-8. `ensureFirstRun()` seeds the local account on first launch.
-9. On success: swap the webview to `http://127.0.0.1:<port>/` — opens
-   authenticated thanks to `DESKTOP_MODE`.
-10. On failure: send the captured error to the splash view via RPC.
-11. On app quit / last window closed: `stop()` terminates the ConvertX child tree.
+8. On success: `webview.loadURL("http://127.0.0.1:<port>/")` — opens straight
+   into the converter (unauthenticated mode, no login screen).
+9. On failure: `webview.loadHTML(...)` with the captured error.
+10. On app exit: terminate the ConvertX child.
 
 ## 8. Converter bundling
 
-Curated set, placed in `vendor/converters/win/`: **FFmpeg, ImageMagick, Pandoc,
-Ghostscript, Poppler, resvg, potrace, vtracer**. The supervisor prepends each
-tool's directory to the child process `PATH`. ConvertX auto-detects which
-converters are present, so exactly these light up.
+Curated set in `vendor/converters/win/`, chosen as ConvertX converter tools with
+simple portable Windows binaries: **FFmpeg** (`ffmpeg`), **ImageMagick**
+(`magick`), **Pandoc** (`pandoc`), **dasel** (`dasel`), **resvg** (`resvg`),
+**potrace** (`potrace`), **vtracer** (`vtracer`). The supervisor prepends this
+directory to the child `PATH`; ConvertX's converters call these via `execFile`,
+which resolves `<name>` to `<name>.exe` on `PATH` on Windows.
 
-**Known gotcha — command names.** ConvertX invokes tools by their Linux names
-(e.g. `gs`, `magick`/`convert`). Some Windows builds differ — Ghostscript ships
-as `gswin64c.exe`. `fetch-converters.ts` normalizes this: each tool is exposed
-on `PATH` under the exact name ConvertX calls (via copy/rename or a thin wrapper).
+**Known limitation.** ConvertX's UI lists *every* converter and format regardless
+of what is installed (its converter registry is static). Conversions that need a
+non-bundled tool (LibreOffice, Calibre, Inkscape, TeX, …) will appear in the UI
+and **fail at runtime** with "Failed, check logs". This is acceptable for this
+pass; hiding unavailable converters would require patching ConvertX and is out of
+scope.
 
-Excluded by decision: **LibreOffice, Calibre, TeXLive** (multi-GB). Conversions
-that need them are simply unavailable; ConvertX degrades gracefully.
+## 9. Auth — no login, no patch
 
-## 9. Auth & first-run
+ConvertX already supports the exact behaviour wanted, via env vars:
 
-ConvertX requires an account and a JWT login. For a single-user local desktop
-app the window should open straight into the converter:
+- `ALLOW_UNAUTHENTICATED=true` — the root page (`/`) skips the login/setup
+  redirect, mints a JWT, sets the auth cookie, and renders the converter directly.
+- `UNAUTHENTICATED_USER_SHARING=true` — pins that implicit user to a stable id
+  (`0`) instead of a random id per page load, so conversion history persists
+  across restarts.
 
-- First run: `bootstrap.ts` generates and persists a stable `JWT_SECRET` and
-  seeds one local account through ConvertX's first-account setup flow.
-- The `DESKTOP_MODE` patch (§6.6) makes ConvertX's auth guard resolve that
-  seeded account for local requests instead of redirecting to `/login`.
-- The ConvertX server binds to `127.0.0.1` only — it is never exposed off-host.
-
-Net effect: no login screen, ever; the account system stays intact underneath.
+With both set, opening `/` lands straight in the converter; the auth cookie it
+sets satisfies the `auth` macro on every other route. **No ConvertX source change
+is needed.** A stable `JWT_SECRET` is generated once and persisted in app-data so
+cookies remain valid across restarts. The ConvertX server binds to `127.0.0.1`
+only.
 
 ## 10. Data & configuration
 
 All persistent state lives under `%APPDATA%\ConvertX-Electrobun\`:
 
-- `data/` — ConvertX's SQLite database, uploads, and outputs (created by
-  ConvertX because the child runs with `cwd` set here — **no patch needed**).
+- `data/` — ConvertX's SQLite DB, uploads, and outputs, reached via the
+  `vendor/convertx/data` → `<appDataDir>\data` directory junction (§6.1).
 - `jwt-secret` — persisted secret so sessions survive restarts.
-- `first-run-done` — marker so account seeding runs once.
 
 ## 11. Error handling
 
 - **Port collision:** avoided by `findFreePort()`.
 - **ConvertX fails to start / times out:** `waitForHealth()` rejects; the
-  supervisor shows the captured stderr in the splash view rather than a blank
-  window.
-- **Orphan processes:** `stop()` kills the child process tree on every exit path.
-- **Missing converters:** handled by ConvertX itself — it only offers conversions
-  whose tools it can find.
+  supervisor shows the captured stderr via `webview.loadHTML(...)` instead of a
+  blank or stuck splash.
+- **Child cleanup:** the ConvertX child is killed on supervisor exit.
+- **Missing converters:** surfaced per-conversion by ConvertX (see §8).
 
 ## 12. Testing strategy
 
-The supervisor modules are the only genuinely new code; build them test-first:
+The supervisor modules are the only genuinely new code; build them test-first
+with `bun test`:
 
-- `findFreePort()` — returned port is bindable; concurrent calls differ.
-- `getAppPaths()` — returns expected paths and creates directories.
-- `waitForHealth()` — resolves against a live stub server; rejects on timeout.
-- `ensureFirstRun()` — idempotent; a second run is a no-op.
-- `convertx-process` teardown — after `stop()` no child PID remains alive.
+- `port.ts` — `findFreePort()` returns a bindable port; two calls differ.
+- `paths.ts` — `getAppPaths()` returns expected paths under a temp `APPDATA`.
+- `health.ts` — `waitForHealth()` resolves against a live stub server; rejects
+  on timeout.
+- `convertx.ts` — `buildConvertxEnv()` produces the expected env (auth vars set,
+  `PATH` prefixed with the converters dir, `PORT` set).
 
-**End-to-end (manual) verification** — see §13.
+**Integration:** `scripts/smoke.ts` converts sample files through a supervised
+ConvertX over HTTP. **Manual:** `electrobun dev` opens the window into the
+converter (see §13).
 
 ## 13. Definition of done (this pass)
 
-1. From a fresh state, `scripts/setup.ts` then the Electrobun dev command
-   launches a native desktop window.
-2. ConvertX boots behind the splash and the window swaps to it.
-3. The window opens **already authenticated** — no login screen.
-4. A real conversion succeeds end-to-end, output downloadable:
-   - PNG → JPG via ImageMagick
-   - MP4 → GIF via FFmpeg
-5. Closing the app leaves no orphaned ConvertX/Bun process.
-6. Supervisor unit tests (§12) pass.
+1. `bun install`, `bun run scripts/setup-convertx.ts`, and
+   `bun run scripts/fetch-converters.ts` complete; `vendor/convertx/` and
+   `vendor/converters/win/` are populated (FFmpeg + ImageMagick present).
+2. `bun test` passes for the supervisor modules.
+3. `electrobun dev` launches a native window; the splash shows, then the window
+   loads ConvertX's converter UI — no login screen.
+4. `scripts/smoke.ts` converts PNG → JPG (ImageMagick) and MP4 → GIF (FFmpeg)
+   against the supervised instance and confirms output files are produced.
+5. Closing the window terminates the ConvertX child (no orphaned Bun process).
 
 ## 14. Out of scope (this pass)
 
 - Packaged `.exe` / installer, code signing, auto-update.
 - macOS and Linux builds.
-- The heavy converters (LibreOffice, Calibre, TeXLive).
-- Any ConvertX feature/UI redesign — its UI is used as-is.
+- The heavy converters (LibreOffice, Calibre, TeXLive, Inkscape, …).
+- Hiding unavailable converters in ConvertX's UI.
+- Any ConvertX feature/UI change — it runs unmodified.
 
-## 15. Open items to verify during implementation
+## 15. Open items (verified — for awareness)
 
-- Exact file and symbol of ConvertX's `user` auth guard, and its first-account
-  setup route (needed for §6.5 and §6.6).
-- Whether ConvertX's first-account setup needs `ACCOUNT_REGISTRATION=true` set
-  for the seed call.
-- Confirmation that ConvertX's served CSS requires the Tailwind build step
-  (assumed yes — setup runs ConvertX's full build).
-- Exact command names ConvertX invokes for each bundled converter, to drive the
-  name-normalization in `fetch-converters.ts`.
-- Which Bun binary runs the child in dev (system `bun`); revisit when packaging.
+- ConvertX `src/index.tsx`, `pages/user.tsx`, `pages/root.tsx`, `helpers/env.ts`,
+  `db/db.ts`, and the converter modules were inspected; the auth-via-env-vars and
+  zero-patch conclusions above are based on that source (v0.17.0). A future
+  ConvertX version could change these; re-check on upgrade.
+- The supervisor resolves the project root from a `build.bun.define` value, with
+  `process.cwd()` as a fallback; if neither resolves correctly under a given
+  Electrobun version, bake the root explicitly.
+- `fetch-converters.ts` uses release-artifact URLs that drift over time; treat a
+  stale URL as routine version maintenance, not a design flaw.
