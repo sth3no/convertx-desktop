@@ -154,8 +154,9 @@ Each component is a small, independently testable unit.
   - `cwd` = `vendor/convertx/` (so `public/` and `./src/main.css` resolve;
     `./data` resolves through the junction to app-data)
   - env: `PORT`, `JWT_SECRET`, `ALLOW_UNAUTHENTICATED=true`,
-    `UNAUTHENTICATED_USER_SHARING=true`, and `PATH` prefixed with
-    `vendor/converters/win`
+    `UNAUTHENTICATED_USER_SHARING=true`, `HTTP_ALLOWED=true` (the loopback
+    server is plain http, so ConvertX's auth cookie must not be flagged
+    Secure), and `PATH` prefixed with `vendor/converters/win`
   - `NODE_ENV` left unset (non-production → Tailwind CSS generated at runtime,
     no pre-build needed)
   - stdout/stderr captured.
