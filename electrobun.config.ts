@@ -1,6 +1,5 @@
 import type { ElectrobunConfig } from "electrobun";
 
-
 export default {
   app: {
     name: "ConvertX",

@@ -19,6 +19,9 @@ export function pickVendorDir(packagedVendor: string, devVendor: string): string
  * Ensure a writable copy of ConvertX exists at `dest`, copied from the
  * (possibly read-only) `src` on first run. A no-op once `dest` exists — delete
  * `dest` to force a refresh after updating the vendored ConvertX.
+ *
+ * The "already copied" check is optimistic — it only tests `dest/package.json`,
+ * so an interrupted first copy must be cleared by hand (delete `dest`).
  */
 export function ensureConvertxCopy(src: string, dest: string): void {
   if (existsSync(join(dest, "package.json"))) return;

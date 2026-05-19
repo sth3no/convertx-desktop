@@ -46,7 +46,8 @@ process.on("SIGTERM", () => { cleanup(); process.exit(0); });
 async function boot(): Promise<void> {
   // vendor/ is baked into the bundle for a packaged app, or sits at the project
   // root in dev. pickVendorDir resolves whichever is present; if it throws
-  // (vendor missing), boot().catch below shows it on the error page.
+  // (vendor missing), boot().catch below shows it on the error page. The dev
+  // candidate assumes `electrobun dev` runs the supervisor with cwd = project root.
   const vendorDir = pickVendorDir(
     join(PATHS.RESOURCES_FOLDER, "app", "vendor"),
     join(process.cwd(), "vendor"),
