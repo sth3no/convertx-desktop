@@ -27,8 +27,8 @@ export interface ConvertxEnvOptions {
  * Build the environment for the ConvertX child process. ConvertX runs in
  * its built-in unauthenticated mode (no login screen), with HTTP cookies
  * allowed (the server is plain http on loopback) and the bundled converter
- * binaries on PATH. NODE_ENV is cleared so ConvertX generates its Tailwind
- * CSS at runtime — no build step is needed.
+ * binaries on PATH. NODE_ENV is set to production so ConvertX serves its
+ * pre-built Tailwind CSS.
  */
 export function buildConvertxEnv(opts: ConvertxEnvOptions): Record<string, string> {
   const env: Record<string, string> = {};
@@ -52,7 +52,7 @@ export function buildConvertxEnv(opts: ConvertxEnvOptions): Record<string, strin
   env.ALLOW_UNAUTHENTICATED = "true";
   env.UNAUTHENTICATED_USER_SHARING = "true";
   env.HTTP_ALLOWED = "true";
-  delete env.NODE_ENV;
+  env.NODE_ENV = "production";
   return env;
 }
 

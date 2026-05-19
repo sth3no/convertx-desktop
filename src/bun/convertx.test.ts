@@ -14,7 +14,7 @@ test("buildConvertxEnv sets the no-login desktop env and prepends converters", (
   expect(env.ALLOW_UNAUTHENTICATED).toBe("true");
   expect(env.UNAUTHENTICATED_USER_SHARING).toBe("true");
   expect(env.HTTP_ALLOWED).toBe("true");
-  expect(env.NODE_ENV).toBeUndefined();
+  expect(env.NODE_ENV).toBe("production");
   expect(env.Path).toBeUndefined();
   expect(env.PATH).toBe(
     `C:\\conv${delimiter}C:\\conv\\imagemagick${delimiter}C:\\Windows`,
