@@ -1,6 +1,5 @@
 import type { ElectrobunConfig } from "electrobun";
 
-const PROJECT_ROOT = import.meta.dir;
 
 export default {
   app: {
@@ -12,11 +11,12 @@ export default {
     exitOnLastWindowClosed: true,
   },
   build: {
+    // Keep the bundle as plain files (no app.asar) so vendor/ — copied in by
+    // scripts/bundle-vendor.ts after the build — and the converter binaries
+    // stay directly readable and executable.
+    useAsar: false,
     bun: {
       entrypoint: "src/bun/index.ts",
-      define: {
-        "process.env.CONVERTX_PROJECT_ROOT": JSON.stringify(PROJECT_ROOT),
-      },
     },
     views: {
       mainview: {
