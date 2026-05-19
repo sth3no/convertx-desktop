@@ -21,4 +21,12 @@ if (existsSync(join(CONVERTX_DIR, "package.json"))) {
 }
 
 run("bun", ["install"], CONVERTX_DIR);
-console.log("ConvertX is vendored and ready (unmodified).");
+// ConvertX runs in production mode in the packaged app, which serves a
+// pre-built Tailwind stylesheet. Compile it now (same command as ConvertX's
+// own `build` script, CSS half only).
+run(
+  "bun",
+  ["x", "@tailwindcss/cli", "-i", "./src/main.css", "-o", "./public/generated.css"],
+  CONVERTX_DIR,
+);
+console.log("ConvertX is vendored and ready (unmodified, CSS pre-built).");
