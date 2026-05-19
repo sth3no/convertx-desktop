@@ -1,15 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow, PATHS } from "electrobun/bun";
+import { ensureConvertxCopy, pickVendorDir } from "./bundle";
 import { buildConvertxEnv, converterPathEntries, startConvertX } from "./convertx";
 import { waitForHealth } from "./health";
-import { ensureDataJunction, getAppPaths } from "./paths";
+import { getAppPaths } from "./paths";
 import { findFreePort } from "./port";
-
-const PROJECT_ROOT = process.env.CONVERTX_PROJECT_ROOT ?? process.cwd();
-const CONVERTX_DIR = join(PROJECT_ROOT, "vendor", "convertx");
-const CONVERTERS_DIR = join(PROJECT_ROOT, "vendor", "converters", "win");
 
 /** Read the persisted JWT secret, or generate and persist one on first run. */
 function loadJwtSecret(file: string): string {
@@ -47,15 +44,21 @@ process.on("SIGINT", () => { cleanup(); process.exit(0); });
 process.on("SIGTERM", () => { cleanup(); process.exit(0); });
 
 async function boot(): Promise<void> {
-  if (!existsSync(join(CONVERTX_DIR, "package.json"))) {
-    throw new Error(
-      `ConvertX is not vendored at:\n  ${CONVERTX_DIR}\n\n` +
-        `Run the setup script first:\n  bun run scripts/setup-convertx.ts`,
-    );
-  }
+  // vendor/ is baked into the bundle for a packaged app, or sits at the project
+  // root in dev. pickVendorDir resolves whichever is present; if it throws
+  // (vendor missing), boot().catch below shows it on the error page.
+  const vendorDir = pickVendorDir(
+    join(PATHS.RESOURCES_FOLDER, "app", "vendor"),
+    join(process.cwd(), "vendor"),
+  );
+  const convertersDir = join(vendorDir, "converters", "win");
 
   const paths = getAppPaths();
-  ensureDataJunction(join(CONVERTX_DIR, "data"), paths.dataDir);
+
+  // First run: copy ConvertX from the (read-only-safe) bundle into a writable
+  // location. ConvertX then runs with paths.convertxDir as its cwd, so its
+  // ./data and ./public both resolve inside writable app-data.
+  ensureConvertxCopy(join(vendorDir, "convertx"), paths.convertxDir);
 
   const jwtSecret = loadJwtSecret(paths.jwtSecretFile);
   const port = await findFreePort();
@@ -65,11 +68,11 @@ async function boot(): Promise<void> {
   const env = buildConvertxEnv({
     port,
     jwtSecret,
-    pathPrepend: converterPathEntries(CONVERTERS_DIR),
+    pathPrepend: converterPathEntries(convertersDir),
   });
   const proc = startConvertX({
     bunPath: process.execPath,
-    convertxDir: CONVERTX_DIR,
+    convertxDir: paths.convertxDir,
     env,
     onStdout: (chunk) => process.stdout.write(`[convertx] ${chunk}`),
     onStderr: (chunk) => {
