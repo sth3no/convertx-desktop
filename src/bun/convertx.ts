@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { delimiter, join } from "node:path";
 
@@ -64,9 +64,27 @@ export interface StartOptions {
   env: Record<string, string>;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
+  /**
+   * Fires if the child cannot be spawned (e.g. the convertx copy vanished ->
+   * ENOENT). Bun delivers spawn failures as an async 'error' event; without
+   * this handler they escape the caller's try/catch and crash the supervisor.
+   */
+  onError?: (err: Error) => void;
+  /**
+   * Fires when ConvertX exits on its own (crash or clean exit). Never fires
+   * for an exit caused by stop(), so shutdown does not look like a crash.
+   */
+  onExit?: (code: number | null) => void;
 }
 
-/** Spawn ConvertX (`bun run src/index.tsx`) as a child process. */
+/**
+ * Spawn ConvertX (`bun run src/index.tsx`) as a child process.
+ *
+ * stop() kills the whole process tree: on Windows a plain child.kill() only
+ * terminates the direct bun process, and converter grandchildren (e.g. ffmpeg
+ * mid-conversion) that escaped Bun's kill-on-close job object would survive
+ * as orphans — taskkill /T walks the pid tree and reaps them too.
+ */
 export function startConvertX(opts: StartOptions): { stop: () => void } {
   const child = spawn(opts.bunPath, ["run", "src/index.tsx"], {
     cwd: opts.convertxDir,
@@ -77,13 +95,22 @@ export function startConvertX(opts: StartOptions): { stop: () => void } {
   child.stderr?.setEncoding("utf8");
   if (opts.onStdout) child.stdout?.on("data", opts.onStdout);
   if (opts.onStderr) child.stderr?.on("data", opts.onStderr);
+  if (opts.onError) child.on("error", opts.onError);
 
   let stopped = false;
+  child.on("exit", (code) => {
+    if (!stopped) opts.onExit?.(code);
+  });
   return {
     stop() {
       if (stopped) return;
       stopped = true;
-      child.kill();
+      if (child.exitCode !== null) return; // already exited, nothing to kill
+      if (process.platform === "win32" && child.pid !== undefined) {
+        spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"]);
+      } else {
+        child.kill();
+      }
     },
   };
 }

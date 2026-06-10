@@ -44,14 +44,21 @@ process.on("SIGINT", () => { cleanup(); process.exit(0); });
 process.on("SIGTERM", () => { cleanup(); process.exit(0); });
 
 async function boot(): Promise<void> {
-  // vendor/ is baked into the bundle for a packaged app, or sits at the project
-  // root in dev. pickVendorDir resolves whichever is present; if it throws
-  // (vendor missing), boot().catch below shows it on the error page. The dev
-  // candidate assumes `electrobun dev` runs the supervisor with cwd = project root.
-  const vendorDir = pickVendorDir(
+  // Resolve vendor/ — the first candidate containing convertx/package.json
+  // wins; if none does, pickVendorDir throws and boot().catch below shows it
+  // on the error page. Candidates that resolve to nonexistent or unrelated
+  // dirs (e.g. the dev candidate inside a packaged install) are skipped.
+  const vendorDir = pickVendorDir([
+    // Packaged bundle: vendor/ baked next to the app by scripts/bundle-vendor.ts.
     join(PATHS.RESOURCES_FOLDER, "app", "vendor"),
+    // Dev (`bun run dev`): electrobun wipes build/dev-win-x64 on every build
+    // and runs the launcher with cwd = .../ConvertX-dev/bin, so reach the
+    // project root from Resources -> ConvertX-dev -> dev-win-x64 -> build ->
+    // project root (four ".." segments).
+    join(PATHS.RESOURCES_FOLDER, "..", "..", "..", "..", "vendor"),
+    // Supervisor run directly from the project root (e.g. `bun src/bun/index.ts`).
     join(process.cwd(), "vendor"),
-  );
+  ]);
   const convertersDir = join(vendorDir, "converters", "win");
 
   const paths = getAppPaths();
@@ -71,6 +78,14 @@ async function boot(): Promise<void> {
     jwtSecret,
     pathPrepend: converterPathEntries(convertersDir),
   });
+  // Rejects when the ConvertX child dies or fails to spawn (never on stop()).
+  // Raced against waitForHealth so a crash at boot surfaces immediately
+  // instead of after the full health timeout.
+  let rejectChildFailure: (err: Error) => void = () => {};
+  const childFailure = new Promise<never>((_, reject) => {
+    rejectChildFailure = reject;
+  });
+
   const proc = startConvertX({
     bunPath: process.execPath,
     convertxDir: paths.convertxDir,
@@ -80,11 +95,15 @@ async function boot(): Promise<void> {
       stderrTail = (stderrTail + chunk).slice(-4000);
       process.stderr.write(`[convertx] ${chunk}`);
     },
+    onError: (err) =>
+      rejectChildFailure(new Error(`ConvertX failed to spawn: ${err.message}`)),
+    onExit: (code) =>
+      rejectChildFailure(new Error(`ConvertX exited with code ${code ?? "unknown"}`)),
   });
   stopConvertX = proc.stop;
 
   try {
-    await waitForHealth(url, 45_000);
+    await Promise.race([waitForHealth(url, 45_000), childFailure]);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     mainWindow.webview.loadHTML(
@@ -95,6 +114,16 @@ async function boot(): Promise<void> {
 
   mainWindow.webview.loadURL(url);
   console.log(`ConvertX ready at ${url}`);
+
+  // If ConvertX dies after the app is up (not via stop()), replace the dead
+  // webview with diagnostics instead of leaving it unresponsive.
+  childFailure.catch((err: Error) => {
+    mainWindow.webview.loadHTML(
+      errorPage(
+        `ConvertX stopped unexpectedly.\n${err.message}\n\n--- ConvertX stderr ---\n${stderrTail || "(none)"}`,
+      ),
+    );
+  });
 }
 
 boot().catch((err) => {
