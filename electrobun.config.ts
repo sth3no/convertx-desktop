@@ -28,6 +28,10 @@ export default {
     },
     mac: { bundleCEF: false },
     linux: { bundleCEF: false },
-    win: { bundleCEF: false },
+    // Taskbar/shortcuts/Explorer icon (the title-bar glyph is not settable on
+    // Windows in Electrobun 1.18.1). Electrobun's own rcedit embedding is
+    // broken in this install, so scripts/bundle-vendor.ts re-embeds it; the
+    // key stays here so a fixed Electrobun picks it up natively.
+    win: { bundleCEF: false, icon: "assets/icon.ico" },
   },
 } satisfies ElectrobunConfig;
