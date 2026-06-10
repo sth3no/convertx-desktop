@@ -16,9 +16,11 @@ const OUT_DIR = join(PROJECT_ROOT, "vendor", "converters", "win");
 
 interface Tool {
   name: string;
-  /** github: resolve latest release asset by regex. url: fixed URL. */
+  /** github: resolve a release asset by regex. url: fixed URL. */
   source: "github" | "url";
   repo?: string;
+  /** Release tag to fetch from. Defaults to the latest release. */
+  tag?: string;
   url?: string;
   assetMatch?: RegExp;
   /** "exe": the download is the binary. "zip": extract and find exeName. */
@@ -58,6 +60,10 @@ const TOOLS: Tool[] = [
     name: "dasel",
     source: "github",
     repo: "TomWright/dasel",
+    // Pinned: ConvertX invokes the dasel v2 CLI (--file/--read/--write);
+    // dasel v3 removed those flags, so "latest" ships a binary every dasel
+    // conversion fails against. Last v2 release as of 2026-06.
+    tag: "v2.8.1",
     assetMatch: /dasel_windows_amd64\.exe$/i,
     kind: "exe",
     exeName: "dasel.exe",
@@ -87,14 +93,15 @@ const TOOLS: Tool[] = [
   },
 ];
 
-async function resolveGithubAsset(repo: string, match: RegExp): Promise<string> {
-  const res = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
+async function resolveGithubAsset(repo: string, match: RegExp, tag?: string): Promise<string> {
+  const releasePath = tag ? `releases/tags/${tag}` : "releases/latest";
+  const res = await fetch(`https://api.github.com/repos/${repo}/${releasePath}`, {
     headers: { "user-agent": "convertx-electrobun-setup", accept: "application/vnd.github+json" },
   });
-  if (!res.ok) throw new Error(`GitHub API ${res.status} for ${repo}`);
+  if (!res.ok) throw new Error(`GitHub API ${res.status} for ${repo} (${releasePath})`);
   const release = (await res.json()) as { assets: { name: string; browser_download_url: string }[] };
   const asset = release.assets.find((a) => match.test(a.name));
-  if (!asset) throw new Error(`No asset matching ${match} in latest ${repo} release`);
+  if (!asset) throw new Error(`No asset matching ${match} in ${tag ?? "latest"} ${repo} release`);
   return asset.browser_download_url;
 }
 
@@ -138,7 +145,7 @@ function unzip(zipPath: string, destDir: string): void {
 async function fetchTool(tool: Tool, tmp: string): Promise<void> {
   const url =
     tool.source === "github"
-      ? await resolveGithubAsset(tool.repo!, tool.assetMatch!)
+      ? await resolveGithubAsset(tool.repo!, tool.assetMatch!, tool.tag)
       : tool.url!;
   console.log(`  ${tool.name}: ${url}`);
 
@@ -199,6 +206,18 @@ async function main(): Promise<void> {
         "  ImageMagick portable dir  -> vendor/converters/win/imagemagick/ (contains magick.exe)",
     );
   }
+
+  // Any failed download must fail the setup chain ('bun run setup' uses &&),
+  // otherwise 'bun run package' ships a bundle whose converters are missing
+  // and conversions only break at runtime. The on-disk WARNING above covers
+  // the complementary case of stale leftovers masking a total failure.
+  if (results.some((r) => !r.ok)) {
+    console.error("\nERROR: one or more converter downloads failed (see FAIL lines above).");
+    process.exitCode = 1;
+  }
 }
 
-main();
+main().catch((err) => {
+  console.error("fetch-converters failed:", err);
+  process.exitCode = 1;
+});
