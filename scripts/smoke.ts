@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureConvertxCopy } from "../src/bun/bundle";
 import { buildConvertxEnv, converterPathEntries, startConvertX } from "../src/bun/convertx";
@@ -25,29 +26,60 @@ function cookieValue(setCookies: string[], name: string): string {
   throw new Error(`Cookie '${name}' was not set by ConvertX`);
 }
 
+/**
+ * Delete the temp app-data dir. The just-killed ConvertX child may briefly
+ * hold file locks (SQLite db, uploads) on Windows, so retry a few times
+ * before giving up — a leftover temp dir is reported, never fatal.
+ */
+async function removeTempDir(dir: string): Promise<void> {
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch {
+      if (attempt === 5) {
+        console.error(`Warning: could not remove temp dir, left behind: ${dir}`);
+        return;
+      }
+      await Bun.sleep(500);
+    }
+  }
+}
+
 async function main(): Promise<void> {
   if (!existsSync(join(VENDOR_CONVERTX, "package.json"))) {
     throw new Error("ConvertX not vendored — run scripts/setup-convertx.ts first.");
   }
 
-  const paths = getAppPaths();
-  ensureConvertxCopy(VENDOR_CONVERTX, paths.convertxDir);
-  const port = await findFreePort();
-  const base = `http://127.0.0.1:${port}`;
+  // Run against a throwaway app-data dir: the default base is the REAL
+  // %APPDATA% profile, where ensureConvertxCopy would no-op onto a stale copy
+  // and the test would write into the production SQLite DB. A fresh copy of
+  // vendor/convertx per run is the accepted cost — correctness over speed.
+  const appDataBase = mkdtempSync(join(tmpdir(), "cx-smoke-"));
+  console.log(`Using temp app-data base: ${appDataBase}`);
 
-  const env = buildConvertxEnv({
-    port,
-    jwtSecret: randomUUID(),
-    pathPrepend: converterPathEntries(CONVERTERS_DIR),
-  });
-  const proc = startConvertX({
-    bunPath: process.execPath,
-    convertxDir: paths.convertxDir,
-    env,
-    onStderr: (c) => process.stderr.write(`[convertx] ${c}`),
-  });
-
+  // The try opens right after mkdtempSync: the vendor copy and port allocation
+  // below can throw, and the finally must still remove the temp dir (including
+  // a large half-written convertx.partial).
+  let proc: { stop: () => void } | undefined;
   try {
+    const paths = getAppPaths(appDataBase);
+    ensureConvertxCopy(VENDOR_CONVERTX, paths.convertxDir);
+    const port = await findFreePort();
+    const base = `http://127.0.0.1:${port}`;
+
+    const env = buildConvertxEnv({
+      port,
+      jwtSecret: randomUUID(),
+      pathPrepend: converterPathEntries(CONVERTERS_DIR),
+    });
+    proc = startConvertX({
+      bunPath: process.execPath,
+      convertxDir: paths.convertxDir,
+      env,
+      onStderr: (c) => process.stderr.write(`[convertx] ${c}`),
+    });
+
     await waitForHealth(`${base}/`, 45_000);
 
     // 1. GET / -> ConvertX mints the auth + jobId cookies (no login screen).
@@ -107,7 +139,8 @@ async function main(): Promise<void> {
     }
     throw new Error(`Timed out waiting for output in: ${outDir}`);
   } finally {
-    proc.stop();
+    proc?.stop();
+    await removeTempDir(appDataBase);
   }
 }
 
