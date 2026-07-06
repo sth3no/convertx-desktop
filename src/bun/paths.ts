@@ -9,6 +9,10 @@ export interface AppPaths {
   convertxDir: string;
   /** Persisted JWT secret file. */
   jwtSecretFile: string;
+  /** Rotating log files (see src/bun/logger.ts). */
+  logsDir: string;
+  /** Persisted window bounds + maximized flag. */
+  windowStateFile: string;
 }
 
 /**
@@ -24,5 +28,7 @@ export function getAppPaths(
     appDataDir,
     convertxDir: join(appDataDir, "convertx"),
     jwtSecretFile: join(appDataDir, "jwt-secret"),
+    logsDir: join(appDataDir, "logs"),
+    windowStateFile: join(appDataDir, "window-state.json"),
   };
 }
