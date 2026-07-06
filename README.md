@@ -1,6 +1,6 @@
-# ConvertX-Electrobun
+# ConvertX Desktop
 
-A standalone Windows 11 desktop app that packages the [ConvertX](https://github.com/C4illin/ConvertX)
+ConvertX Desktop — a standalone Windows 11 desktop app that packages the [ConvertX](https://github.com/C4illin/ConvertX)
 self-hosted file converter inside an [Electrobun](https://electrobun.dev) shell. ConvertX is
 vendored **unmodified** — no Docker, no login screen, and no network access needed at runtime.
 Converter binaries (ffmpeg, ImageMagick, pandoc, …) are bundled alongside the app.
