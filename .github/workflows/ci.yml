@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Cache converter binaries (keyed on the pin manifest)
+        id: conv-cache
+        uses: actions/cache@v6
+        with:
+          path: vendor/converters/win
+          key: converters-${{ runner.os }}-${{ hashFiles('scripts/converter-manifest.json') }}
+
+      - run: bun install --frozen-lockfile
+
+      - name: Setup (vendor + converters + manifest)
+        if: steps.conv-cache.outputs.cache-hit != 'true'
+        run: bun run setup
+
+      - name: Setup without converter re-download (cache hit)
+        if: steps.conv-cache.outputs.cache-hit == 'true'
+        run: bun run scripts/setup-convertx.ts && bun run scripts/write-vendor-manifest.ts
+
+      - run: bun x tsc --noEmit
+      - run: bun run test
+
+      - name: Smoke test (headless end-to-end conversion, loopback assert)
+        run: bun run scripts/smoke.ts
+        timeout-minutes: 10

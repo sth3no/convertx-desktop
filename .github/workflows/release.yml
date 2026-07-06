@@ -1,0 +1,135 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: # dry run: builds everything, uploads workflow artifacts, no release
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - name: Version gate (tag must match package.json)
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(bun -e 'console.log(require("./package.json").version)')"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Tag v$TAG does not match package.json version $PKG" >&2
+            exit 1
+          fi
+
+      - name: Cache converter binaries (keyed on the pin manifest)
+        id: conv-cache
+        uses: actions/cache@v6
+        with:
+          path: vendor/converters/win
+          key: converters-${{ runner.os }}-${{ hashFiles('scripts/converter-manifest.json') }}
+
+      - run: bun install --frozen-lockfile
+
+      - name: Setup (vendor + converters + manifest)
+        if: steps.conv-cache.outputs.cache-hit != 'true'
+        run: bun run setup
+
+      - name: Setup without converter re-download (cache hit)
+        if: steps.conv-cache.outputs.cache-hit == 'true'
+        run: bun run scripts/setup-convertx.ts && bun run scripts/write-vendor-manifest.ts
+
+      - run: bun x tsc --noEmit
+      - run: bun run test
+
+      - name: Smoke test
+        run: bun run scripts/smoke.ts
+        timeout-minutes: 10
+
+      - name: Package the app bundle
+        run: bun run package
+
+      - name: Ensure WebView2 Runtime (not guaranteed on the windows-2025 image)
+        shell: pwsh
+        run: |
+          $key = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+          $pv = (Get-ItemProperty -Path $key -Name pv -ErrorAction SilentlyContinue).pv
+          if ($pv -and $pv -ne "0.0.0.0") { Write-Host "WebView2 Runtime present: $pv"; exit 0 }
+          Write-Host "Installing WebView2 Runtime..."
+          Invoke-WebRequest "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile "$env:TEMP\wv2setup.exe"
+          Start-Process -Wait -FilePath "$env:TEMP\wv2setup.exe" -ArgumentList "/silent","/install"
+
+      # GUI launch on a non-interactive runner: works per Tauri/WebView2 prior
+      # art. If this step ever proves flaky, demote it to the local release
+      # gate documented in RELEASING.md rather than blocking releases.
+      - name: Verify packaged bundle (single instance, stale-lock takeover)
+        run: bun run scripts/verify-packaged.ts
+        timeout-minutes: 15
+
+      - name: Ensure Inno Setup (preinstalled on current image; guard for churn)
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            choco install innosetup -y --no-progress
+          }
+
+      # ------------------------------------------------------------------
+      # SIGNING INSERTION POINT (master plan §6.2 — track deferred by user).
+      # When enabled: sign build\dev-win-x64\ConvertX-dev\bin\launcher.exe and
+      # bun.exe HERE (before the installer compiles them in), then sign
+      # dist\ConvertX-Desktop-*-Setup.exe after the "Build installer" step.
+      # ------------------------------------------------------------------
+
+      - name: Build installer
+        run: bun run installer
+
+      - name: Silent-install probe (install, verify, uninstall)
+        shell: pwsh
+        run: |
+          $v = bun -e 'console.log(require("./package.json").version)'
+          Start-Process -Wait -FilePath "dist\ConvertX-Desktop-$v-Setup.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART"
+          $app = "$env:LOCALAPPDATA\Programs\ConvertX Desktop"
+          if (-not (Test-Path "$app\bin\launcher.exe")) { throw "installed launcher missing" }
+          if (Test-Path "$app\bin\app.log") { throw "build debris app.log shipped" }
+          $unins = Get-ChildItem "$app\unins*.exe" | Select-Object -First 1
+          Start-Process -Wait -FilePath $unins.FullName -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART"
+          foreach ($i in 1..30) {
+            if (-not (Test-Path "$app\bin\launcher.exe")) { break }
+            Start-Sleep -Seconds 1
+          }
+          if (Test-Path "$app\bin\launcher.exe") { throw "uninstall left the app behind" }
+          Write-Host "Silent install + uninstall OK"
+
+      - name: Portable zip
+        run: bun run portable
+        timeout-minutes: 20
+
+      - name: Release assets (checksums + notes)
+        run: bun run release-assets
+
+      - name: Upload artifacts (dry-run inspection)
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dist
+          path: dist/*
+
+      - name: Draft GitHub release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v3
+        with:
+          draft: true
+          name: ConvertX Desktop ${{ github.ref_name }}
+          body_path: dist/RELEASE-NOTES.md
+          files: |
+            dist/ConvertX-Desktop-*-Setup.exe
+            dist/ConvertX-Desktop-*-portable.zip
+            dist/SHA256SUMS.txt
