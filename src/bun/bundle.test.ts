@@ -112,3 +112,85 @@ test("ensureConvertxCopy replaces a dest lacking package.json (pre-atomic partia
   expect(existsSync(join(dest, "package.json"))).toBe(true);
   expect(existsSync(join(dest, "leftover.txt"))).toBe(false);
 });
+
+function makeSrcWithManifest(manifestText: string): { src: string; manifestFile: string } {
+  const base = mkdtempSync(join(tmpdir(), "cx-refresh-"));
+  const src = join(base, "vendor", "convertx");
+  mkdirSync(src, { recursive: true });
+  writeFileSync(join(src, "package.json"), '{"name":"convertx"}');
+  writeFileSync(join(src, "app.ts"), "// v-marker");
+  const manifestFile = join(base, "vendor", "vendor-manifest.json");
+  writeFileSync(manifestFile, manifestText);
+  return { src, manifestFile };
+}
+
+test("first copy with a manifest records the marker and returns 'created'", () => {
+  const { src, manifestFile } = makeSrcWithManifest('{"v":1}');
+  const dest = join(mkdtempSync(join(tmpdir(), "cx-r1-")), "convertx");
+  expect(ensureConvertxCopy(src, dest, manifestFile)).toBe("created");
+  expect(readFileSync(join(dest, ".vendor-manifest.json"), "utf8")).toBe('{"v":1}');
+});
+
+test("same manifest -> 'unchanged'; different manifest -> refresh preserving data/", () => {
+  const { src, manifestFile } = makeSrcWithManifest('{"v":1}');
+  const dest = join(mkdtempSync(join(tmpdir(), "cx-r2-")), "convertx");
+  ensureConvertxCopy(src, dest, manifestFile);
+
+  // Simulate user state accumulated in the running copy.
+  mkdirSync(join(dest, "data"), { recursive: true });
+  writeFileSync(join(dest, "data", "db.sqlite"), "user conversions");
+  // Simulate a stale app file that the refresh must replace.
+  writeFileSync(join(dest, "app.ts"), "// OLD");
+
+  expect(ensureConvertxCopy(src, dest, manifestFile)).toBe("unchanged");
+  expect(readFileSync(join(dest, "app.ts"), "utf8")).toBe("// OLD");
+
+  writeFileSync(manifestFile, '{"v":2}');
+  expect(ensureConvertxCopy(src, dest, manifestFile)).toBe("refreshed");
+  // App files come from the new vendor copy...
+  expect(readFileSync(join(dest, "app.ts"), "utf8")).toBe("// v-marker");
+  // ...user data survives the swap...
+  expect(readFileSync(join(dest, "data", "db.sqlite"), "utf8")).toBe("user conversions");
+  // ...and the marker is updated, so the next boot is a no-op again.
+  expect(readFileSync(join(dest, ".vendor-manifest.json"), "utf8")).toBe('{"v":2}');
+  expect(ensureConvertxCopy(src, dest, manifestFile)).toBe("unchanged");
+  // No staging leftovers.
+  expect(existsSync(`${dest}.partial`)).toBe(false);
+  expect(existsSync(`${dest}.old`)).toBe(false);
+});
+
+test("an existing copy without a marker is refreshed once (pre-Phase-1 upgrade)", () => {
+  const { src, manifestFile } = makeSrcWithManifest('{"v":1}');
+  const dest = join(mkdtempSync(join(tmpdir(), "cx-r3-")), "convertx");
+  // Old-style copy: no marker file.
+  mkdirSync(dest, { recursive: true });
+  writeFileSync(join(dest, "package.json"), '{"name":"convertx"}');
+  mkdirSync(join(dest, "data"), { recursive: true });
+  writeFileSync(join(dest, "data", "db.sqlite"), "old data");
+
+  expect(ensureConvertxCopy(src, dest, manifestFile)).toBe("refreshed");
+  expect(readFileSync(join(dest, "data", "db.sqlite"), "utf8")).toBe("old data");
+  expect(existsSync(join(dest, "app.ts"))).toBe(true);
+});
+
+test("without a manifest file the legacy behavior is kept (copy once, then no-op)", () => {
+  const base = mkdtempSync(join(tmpdir(), "cx-r4-"));
+  const src = join(base, "src-convertx");
+  mkdirSync(src, { recursive: true });
+  writeFileSync(join(src, "package.json"), '{"name":"convertx"}');
+  const dest = join(base, "dest-convertx");
+  expect(ensureConvertxCopy(src, dest)).toBe("created");
+  expect(ensureConvertxCopy(src, dest)).toBe("unchanged");
+  expect(existsSync(join(dest, ".vendor-manifest.json"))).toBe(false);
+});
+
+test("onStage callback announces first-copy and refresh before the heavy work", () => {
+  const { src, manifestFile } = makeSrcWithManifest('{"v":1}');
+  const dest = join(mkdtempSync(join(tmpdir(), "cx-r5-")), "convertx");
+  const stages: string[] = [];
+  ensureConvertxCopy(src, dest, manifestFile, (s) => stages.push(s));
+  writeFileSync(manifestFile, '{"v":2}');
+  ensureConvertxCopy(src, dest, manifestFile, (s) => stages.push(s));
+  ensureConvertxCopy(src, dest, manifestFile, (s) => stages.push(s));
+  expect(stages).toEqual(["first-copy", "refresh"]);
+});

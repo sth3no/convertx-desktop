@@ -1,4 +1,4 @@
-import { cpSync, existsSync, renameSync, rmSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { EXCLUDED_CONVERTX_ENTRIES } from "../shared/vendor-spec";
 
@@ -19,27 +19,21 @@ export function pickVendorDir(candidates: readonly string[]): string {
   );
 }
 
+export type CopyResult = "created" | "refreshed" | "unchanged";
+export type CopyStage = "first-copy" | "refresh";
+
+/** Marker inside the app-data copy recording which vendor manifest built it. */
+const COPY_MARKER = ".vendor-manifest.json";
+
 /**
- * Ensure a writable copy of ConvertX exists at `dest`, copied from the
- * (possibly read-only) `src` on first run. A no-op once `dest/package.json`
- * exists — delete `dest` to force a refresh after updating the vendored
- * ConvertX.
- *
- * The copy is atomic-ish: it lands in `dest + ".partial"` first and is renamed
- * into place, so an interrupted run self-heals on the next launch instead of
- * leaving a half-copy that passes the package.json check. Top-level `data/`
- * and `.git/` in `src` are never copied (runtime/developer state, not app
- * source).
+ * Stage a filtered copy of `src` at `dest + ".partial"`. Top-level `data/`
+ * and `.git/` are never copied (runtime/developer state). A leftover
+ * `.partial` from a crashed previous run is stale by definition — discarded.
+ * Compare resolved paths so separator differences can't defeat the filter;
+ * nested dirs with the same names (e.g. src/data) are source and must be kept.
  */
-export function ensureConvertxCopy(src: string, dest: string): void {
-  if (existsSync(join(dest, "package.json"))) return;
-  // Exclude runtime/developer state from the copy (EXCLUDED_CONVERTX_ENTRIES).
-  // Compare resolved paths so separator differences can't defeat the filter;
-  // nested dirs with the same names (e.g. src/data) are source and must be kept.
+function stagePartialCopy(src: string, dest: string): string {
   const excluded = new Set(EXCLUDED_CONVERTX_ENTRIES.map((entry) => resolve(src, entry)));
-  // Copy to a sibling temp dir, then rename into place, so a crash mid-copy
-  // never leaves a half-populated `dest` that looks complete. A leftover
-  // `.partial` from a previous crash is stale by definition — discard it.
   const partial = `${dest}.partial`;
   rmSync(partial, { recursive: true, force: true });
   cpSync(src, partial, {
@@ -47,9 +41,64 @@ export function ensureConvertxCopy(src: string, dest: string): void {
     dereference: true,
     filter: (source) => !excluded.has(resolve(source)),
   });
-  // A dest without package.json is a partial from before the copy was atomic
-  // (the early-return above already handled the completed case) — clear it so
-  // the rename can land.
+  return partial;
+}
+
+/**
+ * Ensure a writable, current copy of ConvertX exists at `dest`.
+ *
+ * - No copy yet -> copy `src` into place ("created").
+ * - Copy exists and `vendorManifestFile` matches the marker recorded inside
+ *   the copy -> no-op ("unchanged").
+ * - Copy exists but the manifest differs (an app update shipped a new vendor)
+ *   or the marker is missing (pre-Phase-1 copy) -> staged refresh that
+ *   preserves the copy's `data/` (uploads, outputs, SQLite DB): the new copy
+ *   is fully staged first, the old `data/` is moved in, then directories are
+ *   swapped ("refreshed").
+ *
+ * Every mutation is staged in `dest + ".partial"` and renamed into place, so
+ * an interrupted run self-heals on the next launch. Without a manifest file
+ * the legacy behavior is kept: copy once, never refresh.
+ */
+export function ensureConvertxCopy(
+  src: string,
+  dest: string,
+  vendorManifestFile?: string,
+  onStage?: (stage: CopyStage) => void,
+): CopyResult {
+  const manifest =
+    vendorManifestFile && existsSync(vendorManifestFile)
+      ? readFileSync(vendorManifestFile, "utf8")
+      : undefined;
+  const markerFile = join(dest, COPY_MARKER);
+
+  if (existsSync(join(dest, "package.json"))) {
+    if (manifest === undefined) return "unchanged";
+    const marker = existsSync(markerFile) ? readFileSync(markerFile, "utf8") : undefined;
+    if (marker === manifest) return "unchanged";
+
+    onStage?.("refresh");
+    const partial = stagePartialCopy(src, dest);
+    // Preserve user state: data/ moves from the old copy into the staged one
+    // only after the stage completed, so a crash before this point leaves the
+    // old copy fully intact.
+    const oldData = join(dest, "data");
+    if (existsSync(oldData)) renameSync(oldData, join(partial, "data"));
+    writeFileSync(join(partial, COPY_MARKER), manifest);
+    const trash = `${dest}.old`;
+    rmSync(trash, { recursive: true, force: true });
+    renameSync(dest, trash);
+    renameSync(partial, dest);
+    rmSync(trash, { recursive: true, force: true });
+    return "refreshed";
+  }
+
+  onStage?.("first-copy");
+  const partial = stagePartialCopy(src, dest);
+  if (manifest !== undefined) writeFileSync(join(partial, COPY_MARKER), manifest);
+  // A dest without package.json is a half-copy from before staging existed —
+  // clear it so the rename can land.
   rmSync(dest, { recursive: true, force: true });
   renameSync(partial, dest);
+  return "created";
 }
