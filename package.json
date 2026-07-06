@@ -9,6 +9,10 @@
     "dev": "electrobun dev",
     "build": "electrobun build",
     "package": "electrobun build && bun run scripts/bundle-vendor.ts",
+    "installer": "bun run scripts/build-installer.ts",
+    "portable": "bun run scripts/make-portable-zip.ts",
+    "release-assets": "bun run scripts/make-release-assets.ts",
+    "dist": "bun run package && bun run installer && bun run portable && bun run release-assets",
     "test": "bun test src scripts",
     "setup": "bun run scripts/setup-convertx.ts && bun run scripts/fetch-converters.ts && bun run scripts/write-vendor-manifest.ts"
   },
