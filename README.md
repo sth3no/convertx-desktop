@@ -117,7 +117,8 @@ the next launch. To force a fresh copy after re-vendoring ConvertX, delete
 
 ## Licensing
 
-ConvertX is licensed under the **GNU AGPL-3.0** (see `vendor/convertx/LICENSE` after setup).
+This repository is licensed under the **GNU AGPL-3.0** (see `LICENSE`), the same license as
+ConvertX itself (see `vendor/convertx/LICENSE` after setup).
 This repo's scripts vendor ConvertX unmodified and bundle it together with its converter
 binaries. If you distribute the packaged bundle, you are distributing ConvertX, and the
 AGPL-3.0 terms apply to that distribution. The bundled converter binaries each carry their own

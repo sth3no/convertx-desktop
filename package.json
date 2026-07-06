@@ -2,6 +2,7 @@
   "name": "convertx-electrobun",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "module": "src/bun/index.ts",
   "type": "module",
   "scripts": {
