@@ -21,9 +21,20 @@ A Bun "supervisor" (`src/bun/index.ts`) drives everything:
    binaries prepended to `PATH` (`src/bun/convertx.ts`). It runs in ConvertX's built-in
    unauthenticated mode (`ALLOW_UNAUTHENTICATED=true`) with `NODE_ENV=production`, serving the
    Tailwind CSS pre-built at setup time.
-4. Polls the server until it responds (`src/bun/health.ts`, 45 s timeout), showing a splash page
-   meanwhile, then points the native window at `http://127.0.0.1:<port>/`. On failure it renders
-   an error page including ConvertX's stderr tail.
+4. Polls the server's `/healthcheck` until it answers (`src/bun/health.ts`, 45 s timeout), showing
+   a splash page with stage updates meanwhile, then points the native window at
+   `http://127.0.0.1:<port>/`. On failure it renders an error page including ConvertX's stderr
+   tail, the log-file path, and a Restart button.
+
+The supervisor also enforces desktop behavior: a single-instance lock (second launches focus the
+running window), a token-authed loopback control server (focus/restart/open-external), a Bun
+`--preload` shim that pins the ConvertX server to 127.0.0.1 (it would otherwise bind 0.0.0.0 —
+LAN-visible with authentication disabled), a stable preferred port (17843) so webview state
+survives restarts, window-state persistence, one guarded auto-restart on crashes, rotating log
+files, and an automatic refresh of the app-data ConvertX copy whenever the bundled
+`vendor-manifest.json` changes (user `data\` is preserved). External links open in the system
+browser. Converted files and history are kept for 7 days by default
+(`CONVERTX_DESKTOP_AUTO_DELETE_HOURS` overrides; `0` disables cleanup).
 
 ## Prerequisites (build machine)
 
@@ -66,8 +77,11 @@ Then:
 bun run dev                # launch the app in dev mode (electrobun dev)
 bun run test               # unit tests (src + scripts)
 bun run scripts/smoke.ts   # end-to-end smoke test: boots ConvertX headless,
-                           # uploads a PNG, converts it to JPG via ImageMagick
+                           # uploads a PNG, converts it to JPG via ImageMagick,
+                           # asserts the server binds loopback-only
 bun run package            # electrobun build + bake vendor/ into the bundle
+bun run scripts/verify-packaged.ts  # integration checks against the built
+                                    # bundle (single instance, stale-lock takeover)
 ```
 
 `bun run package` runs `electrobun build` and then `scripts/bundle-vendor.ts`, which copies
@@ -99,12 +113,16 @@ Everything writable lives under `%APPDATA%\ConvertX-Electrobun\`:
 
 - `convertx\` — the running copy of ConvertX (its `data\` holds uploads, output, and the SQLite DB)
 - `jwt-secret` — the persisted JWT secret, generated on first run
+- `instance.json` — single-instance lock (pid, control port, token, child pid)
+- `window-state.json` — window bounds + maximized flag
+- `logs\convertx.log` (+ `.1`) — rotating supervisor + ConvertX log
+- `loopback-shim.ts` — generated Bun preload shim (pins the server to loopback)
 
-The copy is made only when `convertx\package.json` is absent, and is atomic: it is staged in a
-`convertx.partial` directory and renamed into place, so an interrupted first copy heals itself on
-the next launch. To force a fresh copy after re-vendoring ConvertX, delete
-`%APPDATA%\ConvertX-Electrobun\convertx` and relaunch. (The copy excludes the vendored checkout's
-`data\` and `.git` — ConvertX creates a fresh `data\` on first boot.)
+Copies and refreshes are atomic: they are staged in a `convertx.partial` directory and renamed
+into place, so an interrupted copy heals itself on the next launch. The copy refreshes
+automatically when the bundled vendor manifest changes; `data\` (uploads, output, DB) is
+preserved across refreshes. (The copy excludes the vendored checkout's `data\` and `.git` —
+ConvertX creates a fresh `data\` on first boot.)
 
 ## Known limitations
 
