@@ -1,8 +1,13 @@
 import { expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { buildConvertxEnv, startConvertX } from "./convertx";
+import {
+  buildConvertxEnv,
+  LOOPBACK_SHIM_SOURCE,
+  startConvertX,
+  writeLoopbackShim,
+} from "./convertx";
 
 /** process.env narrowed to string values, as startConvertX's env requires. */
 function testEnv(): Record<string, string> {
@@ -185,3 +190,53 @@ test("stop() kills converter grandchildren, not just the direct child", async ()
     rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 }, 30_000);
+
+test("buildConvertxEnv defaults retention to 7 days and honors the override", () => {
+  const defaulted = buildConvertxEnv({ port: 1, jwtSecret: "s", pathPrepend: [], baseEnv: {} });
+  expect(defaulted.AUTO_DELETE_EVERY_N_HOURS).toBe("168");
+  const overridden = buildConvertxEnv({
+    port: 1,
+    jwtSecret: "s",
+    pathPrepend: [],
+    baseEnv: {},
+    autoDeleteHours: "0",
+  });
+  expect(overridden.AUTO_DELETE_EVERY_N_HOURS).toBe("0");
+});
+
+test("writeLoopbackShim writes the Bun.serve wrapper into app-data", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cx-shim-"));
+  const file = writeLoopbackShim(dir);
+  expect(file).toBe(join(dir, "loopback-shim.ts"));
+  expect(readFileSync(file, "utf8")).toBe(LOOPBACK_SHIM_SOURCE);
+});
+
+test("startConvertX runs the preload file before the entrypoint and reports a pid", async () => {
+  // The preload writes a marker file; the fake ConvertX exits immediately.
+  // If `bun --preload <file> run src/index.tsx` were the wrong flag shape,
+  // the marker would never appear.
+  const dir = makeFakeConvertxDir("process.exit(0);\n");
+  const marker = join(dir, "preload-ran.txt");
+  const preload = join(dir, "preload.ts");
+  writeFileSync(preload, `await Bun.write(${JSON.stringify(marker)}, "yes");\n`, "utf8");
+  try {
+    const exited = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("child did not exit within 15s")), 15_000);
+      const proc = startConvertX({
+        bunPath: process.execPath,
+        convertxDir: dir,
+        env: testEnv(),
+        preloadFile: preload,
+        onExit: () => {
+          clearTimeout(timer);
+          resolve();
+        },
+      });
+      expect(typeof proc.pid).toBe("number");
+    });
+    await exited;
+    expect(existsSync(marker)).toBe(true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+}, 20_000);
