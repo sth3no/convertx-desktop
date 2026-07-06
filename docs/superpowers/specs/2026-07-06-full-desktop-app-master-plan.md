@@ -1,7 +1,7 @@
 # ConvertX Desktop — Full Desktop App Master Plan
 
 - **Date:** 2026-07-06
-- **Status:** Draft — awaiting user review
+- **Status:** Approved 2026-07-06. Phase 0 complete (2026-07-06, plan: `../plans/2026-07-06-phase0-release-foundations.md`); signing decision deferred by user — re-raise before Phase 2.
 - **Scope:** Everything between today's working packaged bundle and a polished, distributable Windows desktop app.
 - **Relationship to other docs:** This is the roadmap. Each phase below gets its own design spec + implementation plan (the repo convention already used by `2026-05-18-convertx-electrobun-app-design.md` and `2026-05-19-convertx-electrobun-mvp-packaging-design.md`). This document decides *what* and *in which order*; the per-phase specs decide *how*.
 
