@@ -53,5 +53,12 @@ export function startControlServer(handlers: ControlHandlers): ControlServer {
       return new Response("not found", { status: 404 });
     },
   });
-  return { port: server.port, token, stop: () => server.stop(true) };
+  const port = server.port;
+  if (port === undefined) {
+    // Only possible for unix-socket servers per Bun's types; treat as failure
+    // so the caller degrades gracefully.
+    server.stop(true);
+    throw new Error("control server bound without a TCP port");
+  }
+  return { port, token, stop: () => server.stop(true) };
 }
