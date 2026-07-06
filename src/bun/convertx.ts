@@ -116,8 +116,10 @@ export interface StartOptions {
  * as orphans — taskkill /T walks the pid tree and reaps them too.
  */
 export function startConvertX(opts: StartOptions): { stop: () => void; pid: number | undefined } {
+  // Flag position matters: `bun --preload X run Y` silently drops the flag
+  // (verified empirically); the flag must come after the `run` subcommand.
   const args = opts.preloadFile
-    ? ["--preload", opts.preloadFile, "run", "src/index.tsx"]
+    ? ["run", "--preload", opts.preloadFile, "src/index.tsx"]
     : ["run", "src/index.tsx"];
   const child = spawn(opts.bunPath, args, {
     cwd: opts.convertxDir,

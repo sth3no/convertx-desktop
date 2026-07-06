@@ -218,7 +218,13 @@ test("startConvertX runs the preload file before the entrypoint and reports a pi
   const dir = makeFakeConvertxDir("process.exit(0);\n");
   const marker = join(dir, "preload-ran.txt");
   const preload = join(dir, "preload.ts");
-  writeFileSync(preload, `await Bun.write(${JSON.stringify(marker)}, "yes");\n`, "utf8");
+  // Synchronous write: the fake entrypoint exits immediately, so an async
+  // write could be cut off before flushing.
+  writeFileSync(
+    preload,
+    `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "yes");\n`,
+    "utf8",
+  );
   try {
     const exited = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("child did not exit within 15s")), 15_000);
