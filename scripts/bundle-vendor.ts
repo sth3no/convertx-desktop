@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, rmSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import electrobunConfig from "../electrobun.config";
-import { EXCLUDED_CONVERTX_ENTRIES } from "../src/shared/vendor-spec";
+import { EXCLUDED_CONVERTX_ENTRIES, VENDOR_MANIFEST_NAME } from "../src/shared/vendor-spec";
 
 const PROJECT_ROOT = import.meta.dir.replace(/[\\/]scripts$/, "");
 const VENDOR_SRC = join(PROJECT_ROOT, "vendor");
@@ -63,6 +63,17 @@ for (const parts of [["convertx"], ["converters", "win"]]) {
   console.log(`Copying ${src}\n     -> ${dest}`);
   cpSync(src, dest, { recursive: true, dereference: true, filter });
 }
+
+// The vendor manifest records exactly which upstream ref and converter
+// binaries this bundle ships — needed for accurate AGPL source-offer text on
+// releases and, later, the app-data refresh marker (master plan Phase 1).
+const manifestSrc = join(VENDOR_SRC, VENDOR_MANIFEST_NAME);
+if (!existsSync(manifestSrc)) {
+  console.error(`Missing ${manifestSrc}. Run 'bun run setup' (it writes the vendor manifest) first.`);
+  process.exit(1);
+}
+cpSync(manifestSrc, join(vendorDest, VENDOR_MANIFEST_NAME));
+console.log(`Copied ${VENDOR_MANIFEST_NAME} into the bundle.`);
 
 // Electrobun's own icon embedding (build.win.icon) is broken in this install:
 // its compiled CLI resolves rcedit against its own CI build path and only
