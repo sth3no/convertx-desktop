@@ -9,7 +9,7 @@
     "dev": "electrobun dev",
     "build": "electrobun build",
     "package": "electrobun build && bun run scripts/bundle-vendor.ts",
-    "test": "bun test src/bun",
+    "test": "bun test src scripts",
     "setup": "bun run scripts/setup-convertx.ts && bun run scripts/fetch-converters.ts"
   },
   "dependencies": {

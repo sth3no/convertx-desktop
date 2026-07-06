@@ -1,21 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, rmSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
+import electrobunConfig from "../electrobun.config";
+import { EXCLUDED_CONVERTX_ENTRIES } from "../src/shared/vendor-spec";
 
 const PROJECT_ROOT = import.meta.dir.replace(/[\\/]scripts$/, "");
 const VENDOR_SRC = join(PROJECT_ROOT, "vendor");
 const BUILD_DIR = join(PROJECT_ROOT, "build");
 
-/** App name from electrobun.config.ts (app.name). Kept in sync by hand. */
-const APP_NAME = "ConvertX";
-
-/**
- * Top-level entries of vendor/convertx that must never ship: `data` holds the
- * developer's runtime state (sqlite DB, uploads, conversion outputs) and
- * `.git` the clone history. Mirrors the exclusion in src/bun/bundle.ts —
- * duplicated on purpose so this script stays self-contained.
- */
-const EXCLUDED_CONVERTX_ENTRIES = [".git", "data"];
+const APP_NAME = electrobunConfig.app.name;
 
 // The dev bundle's app code dir (Resources/app), resolved deterministically —
 // never by searching build/, which could hit a stale bundle from another env.
@@ -32,7 +25,7 @@ const APP_CODE_DIR = join(BUNDLE_DIR, "Resources", "app");
  * Filtering out a directory prunes everything beneath it, so matching the
  * first path segment is sufficient.
  */
-function excludeTopLevel(srcRoot: string, excluded: string[]): (source: string) => boolean {
+function excludeTopLevel(srcRoot: string, excluded: readonly string[]): (source: string) => boolean {
   const root = resolve(srcRoot);
   return (source) => {
     const topSegment = relative(root, resolve(source)).split(sep)[0]!;

@@ -1,10 +1,11 @@
 import type { ElectrobunConfig } from "electrobun";
+import pkg from "./package.json";
 
 export default {
   app: {
     name: "ConvertX",
     identifier: "dev.convertx.electrobun",
-    version: "0.1.0",
+    version: pkg.version,
   },
   runtime: {
     exitOnLastWindowClosed: true,
