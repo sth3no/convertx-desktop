@@ -1,9 +1,15 @@
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ensureConvertxCopy } from "../src/bun/bundle";
-import { buildConvertxEnv, converterPathEntries, startConvertX } from "../src/bun/convertx";
+import {
+  buildConvertxEnv,
+  converterPathEntries,
+  startConvertX,
+  writeLoopbackShim,
+} from "../src/bun/convertx";
 import { waitForHealth } from "../src/bun/health";
 import { getAppPaths } from "../src/bun/paths";
 import { findFreePort } from "../src/bun/port";
@@ -65,6 +71,7 @@ async function main(): Promise<void> {
   try {
     const paths = getAppPaths(appDataBase);
     ensureConvertxCopy(VENDOR_CONVERTX, paths.convertxDir);
+    const shimFile = writeLoopbackShim(paths.appDataDir);
     const port = await findFreePort();
     const base = `http://127.0.0.1:${port}`;
 
@@ -77,10 +84,24 @@ async function main(): Promise<void> {
       bunPath: process.execPath,
       convertxDir: paths.convertxDir,
       env,
+      preloadFile: shimFile,
       onStderr: (c) => process.stderr.write(`[convertx] ${c}`),
     });
 
     await waitForHealth(`${base}/`, 45_000);
+
+    // The preload shim must have pinned the server to loopback: netstat shows
+    // 127.0.0.1:<port> LISTENING and no wildcard 0.0.0.0:<port> bind.
+    const netstat = spawnSync("netstat", ["-ano", "-p", "TCP"], { encoding: "utf8" }).stdout ?? "";
+    const lines = netstat.split("\n").filter((l) => l.includes(`:${port} `));
+    const loopback = lines.some((l) => l.includes(`127.0.0.1:${port}`));
+    const wildcard = lines.some((l) => l.includes(`0.0.0.0:${port}`));
+    if (!loopback || wildcard) {
+      throw new Error(
+        `ConvertX is not loopback-only (loopback=${loopback}, wildcard=${wildcard}):\n${lines.join("\n")}`,
+      );
+    }
+    console.log("Loopback-only bind confirmed.");
 
     // 1. GET / -> ConvertX mints the auth + jobId cookies (no login screen).
     const root = await fetch(`${base}/`, { redirect: "manual" });
