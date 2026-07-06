@@ -42,23 +42,29 @@ bun install     # install the shell's dependencies (electrobun)
 bun run setup   # vendor ConvertX + download converter binaries (see below)
 ```
 
-`bun run setup` runs two scripts:
+`bun run setup` runs three scripts:
 
-- `scripts/setup-convertx.ts` — shallow-clones the latest ConvertX from
+- `scripts/setup-convertx.ts` — shallow-clones ConvertX from
   `https://github.com/C4illin/ConvertX.git` into `vendor/convertx` (skipped if already present),
   runs `bun install` inside it, and pre-builds its Tailwind CSS (`public/generated.css`) so it can
-  run in production mode. Note: this is **not** a pinned ref — a fresh clone gets the current
-  upstream default branch; delete `vendor/convertx` to re-vendor.
+  run in production mode. The clone is pinned to the commit in `scripts/lib/pins.ts`; delete
+  `vendor/convertx` and re-run setup after bumping the pin.
 - `scripts/fetch-converters.ts` — downloads the converter binaries listed below into
-  `vendor/converters/win/`. Tools resolved from "latest GitHub release" may move; the script
-  prints a per-tool OK/FAIL summary and warns if ffmpeg or ImageMagick are missing (the smoke
-  test needs them). Re-run it or drop the binaries in manually if a download fails.
+  `vendor/converters/win/`. Downloads are pinned by `scripts/converter-manifest.json` (exact
+  URL + sha256 per tool) and hash-verified; the script prints a per-tool OK/FAIL summary and
+  fails the setup chain on any failure. To bump converter versions, run
+  `bun run scripts/fetch-converters.ts --record` and commit the manifest diff.
+- `scripts/write-vendor-manifest.ts` — records all pins (ConvertX ref + version, converter
+  versions/URLs/hashes, Bun version) into `vendor/vendor-manifest.json`, which is baked into
+  packaged bundles as the build's bill of materials.
+
+See `RELEASING.md` for the release process and how to update pins.
 
 Then:
 
 ```powershell
 bun run dev                # launch the app in dev mode (electrobun dev)
-bun test src/bun           # unit tests (same as `bun run test`)
+bun run test               # unit tests (src + scripts)
 bun run scripts/smoke.ts   # end-to-end smoke test: boots ConvertX headless,
                            # uploads a PNG, converts it to JPG via ImageMagick
 bun run package            # electrobun build + bake vendor/ into the bundle
