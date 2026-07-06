@@ -82,6 +82,8 @@ bun run scripts/smoke.ts   # end-to-end smoke test: boots ConvertX headless,
 bun run package            # electrobun build + bake vendor/ into the bundle
 bun run scripts/verify-packaged.ts  # integration checks against the built
                                     # bundle (single instance, stale-lock takeover)
+bun run dist               # package + installer + portable zip + checksums/notes
+                           # (needs Inno Setup: winget install JRSoftware.InnoSetup)
 ```
 
 `bun run package` runs `electrobun build` and then `scripts/bundle-vendor.ts`, which copies
@@ -126,8 +128,9 @@ ConvertX creates a fresh `data\` on first boot.)
 
 ## Known limitations
 
-- The exe is unsigned — Windows SmartScreen warns on first launch.
-- No installer and no auto-update; distribution is the raw bundle folder.
+- The exe is unsigned — Windows SmartScreen warns on first launch. Releases
+  carry `SHA256SUMS.txt` for download verification.
+- No auto-update yet (Phase 3); install updates by running the newer installer.
 - Windows-only: only Windows converter binaries are fetched, and the packaged build is only
   exercised on Windows 11.
 - The app icon (`assets/icon.ico`) is embedded into the packaged bundle's exes by

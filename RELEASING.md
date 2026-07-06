@@ -1,8 +1,9 @@
 # Releasing ConvertX Desktop
 
-Phase 0 state: releases are built locally and are **unsigned** (signing track
-deferred — master plan §6.2). CI, the installer, and auto-update arrive in
-Phases 2–3.
+Releases are built by CI (`.github/workflows/release.yml`) from a version tag
+and published as **drafts** for review. Binaries are **unsigned** (signing
+track deferred — master plan §6.2; the workflow contains a marked signing
+insertion point).
 
 ## Inputs and where they are pinned
 
@@ -17,28 +18,24 @@ Phases 2–3.
 
 ## Release steps
 
-1. Bump `version` in `package.json` (semver). Commit.
-2. Clean build from pinned inputs:
-   ```powershell
-   bun install
-   bun run setup        # vendors ConvertX at the pin, hash-verifies converters,
-                        # writes vendor/vendor-manifest.json
-   bun run test
-   bun run scripts/smoke.ts
-   bun run package      # electrobun build + vendor bake (incl. the manifest)
-   ```
-3. Zip the bundle:
-   ```powershell
-   Compress-Archive -Path build\dev-win-x64\ConvertX-dev\* -DestinationPath ConvertX-Desktop-<version>-win-x64.zip
-   ```
-4. Create a GitHub Release for the tag with:
-   - the zip;
-   - a `SHA256SUMS.txt` (`Get-FileHash` output for every asset);
-   - the exact vendored ConvertX commit (from `vendor/vendor-manifest.json`) and
-     a source link: `https://github.com/C4illin/ConvertX/tree/<ref>` — this is
-     the AGPL source offer for the ConvertX code being distributed;
-   - a note that binaries are unsigned and SmartScreen will warn
-     ("More info → Run anyway").
+1. Bump `version` in `package.json` (single source of truth). Commit to main.
+2. `git tag v<version> && git push origin v<version>`.
+3. CI runs the full gate (tests, smoke, packaged verification, silent-install
+   probe) and uploads installer + portable zip + `SHA256SUMS.txt` to a draft
+   GitHub Release with generated notes (AGPL source ref included).
+4. Review the draft (spot-check the assets; ideally install on a clean VM),
+   then **Publish**.
+
+Dry run without a tag: trigger the Release workflow manually
+(`gh workflow run release.yml`); it uploads the artifacts to the workflow run
+instead of creating a release.
+
+## Local fallback (CI outage)
+
+`bun run dist` produces everything in `dist\` (needs Inno Setup:
+`winget install JRSoftware.InnoSetup`, or the jrsoftware.org installer with
+`/CURRENTUSER` for a no-admin install). Then:
+`gh release create v<version> --draft --title "ConvertX Desktop <version>" --notes-file dist/RELEASE-NOTES.md dist/ConvertX-Desktop-* dist/SHA256SUMS.txt`.
 
 ## Updating pins
 
