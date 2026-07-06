@@ -50,5 +50,9 @@ Name: "{autodesktop}\ConvertX Desktop"; Filename: "{app}\bin\launcher.exe"; Task
 [Run]
 Filename: "{app}\bin\launcher.exe"; Description: "{cm:LaunchProgram,ConvertX Desktop}"; Flags: nowait postinstall skipifsilent
 
-; No [UninstallDelete]: user data in %APPDATA%\ConvertX-Electrobun survives
-; uninstall by design (user decision, Phase 2 spec).
+[UninstallDelete]
+; Runtime debris the launcher writes next to itself — app-owned, not user
+; data. Without this the uninstaller leaves bin\app.log (and thus {app})
+; behind. User data in %APPDATA%\ConvertX-Electrobun is deliberately NOT
+; touched (user decision, Phase 2 spec).
+Type: files; Name: "{app}\bin\app.log"
