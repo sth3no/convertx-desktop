@@ -77,23 +77,26 @@ console.log(`Copied ${VENDOR_MANIFEST_NAME} into the bundle.`);
 
 // Electrobun's own icon embedding (build.win.icon) is broken in this install:
 // its compiled CLI resolves rcedit against its own CI build path and only
-// warns. Embed the icon ourselves with the rcedit binary that ships in
-// electrobun's dependencies. Warn-only on failure, matching electrobun — the
-// icon is cosmetic and must not fail the packaging.
+// warns. Embed the icon ourselves with rcedit (a direct devDependency).
+// FATAL on failure: an icon-less build must never ship silently (Phase 2).
 const rcedit = join(PROJECT_ROOT, "node_modules", "rcedit", "bin", "rcedit-x64.exe");
 const icon = join(PROJECT_ROOT, "assets", "icon.ico");
 for (const exe of ["launcher.exe", "bun.exe"]) {
   const target = join(BUNDLE_DIR, "bin", exe);
   if (!existsSync(rcedit) || !existsSync(icon) || !existsSync(target)) {
-    console.warn(`WARNING: skipped icon embed for ${exe} (rcedit, icon, or target missing).`);
-    continue;
+    console.error(`ERROR: cannot embed icon into ${exe} (rcedit, icon, or target missing).`);
+    process.exit(1);
   }
   const result = spawnSync(rcedit, [target, "--set-icon", icon], { stdio: "inherit" });
-  if (result.status === 0) {
-    console.log(`Embedded icon into ${exe}.`);
-  } else {
-    console.warn(`WARNING: rcedit failed to embed the icon into ${exe} (exit ${result.status}).`);
+  if (result.status !== 0) {
+    console.error(`ERROR: rcedit failed to embed the icon into ${exe} (exit ${result.status}).`);
+    process.exit(1);
   }
+  console.log(`Embedded icon into ${exe}.`);
 }
+
+// Build-machine debris: electrobun's build/dev runs drop an app.log into
+// bin/ — it must not ship in any artifact.
+rmSync(join(BUNDLE_DIR, "bin", "app.log"), { force: true });
 
 console.log("Vendored ConvertX + converters into the app bundle (data/ and .git/ excluded).");
