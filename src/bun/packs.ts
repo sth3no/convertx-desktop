@@ -1,4 +1,6 @@
+import { spawnSync } from "node:child_process";
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -11,6 +13,21 @@ import { dirname, join } from "node:path";
 import { extractArchive, findFile } from "../shared/archive";
 import { sha256OfFile } from "../shared/checksums";
 import type { PackDef } from "./pack-registry";
+
+/**
+ * Extract an MSI as an administrative image — copies payload files without
+ * installing anything (no elevation, no registry product registration).
+ */
+function extractMsiAdmin(msiPath: string, targetDir: string): void {
+  const result = spawnSync(
+    "msiexec",
+    ["/a", msiPath, `TARGETDIR=${targetDir}`, "/qn"],
+    { stdio: "ignore" },
+  );
+  if (result.status !== 0) {
+    throw new Error(`msiexec /a failed (exit ${result.status ?? "unknown"})`);
+  }
+}
 
 export type PackStatus =
   | { state: "available" }
@@ -38,6 +55,8 @@ export interface PackManagerDeps {
   log: (message: string) => void;
   restartConvertx: (reason: string) => void | Promise<void>;
   fetchImpl?: typeof fetch;
+  /** Test seam for the msi-admin extraction (real msiexec by default). */
+  msiExtract?: (msiPath: string, targetDir: string) => void;
 }
 
 /**
@@ -84,7 +103,11 @@ export function createPackManager(deps: PackManagerDeps) {
     if (current.state !== "available" && current.state !== "error") return current;
 
     mkdirSync(deps.packsDir, { recursive: true });
-    const download = join(deps.packsDir, `${name}.download`);
+    // msiexec refuses payloads without an .msi extension.
+    const download = join(
+      deps.packsDir,
+      `${name}.download${def.kind === "msi-admin" ? ".msi" : ""}`,
+    );
     const partial = join(deps.packsDir, `${name}.partial`);
     try {
       ops.set(name, { state: "downloading", received: 0, total: def.sizeBytes });
@@ -109,7 +132,27 @@ export function createPackManager(deps: PackManagerDeps) {
       ops.set(name, { state: "extracting" });
       rmSync(partial, { recursive: true, force: true });
       mkdirSync(partial, { recursive: true });
-      extractArchive(download, partial);
+      if (def.kind === "msi-admin") {
+        (deps.msiExtract ?? extractMsiAdmin)(download, partial);
+        // msiexec /a leaves a stripped copy of the MSI in TARGETDIR — never
+        // part of the payload, always removed.
+        for (const entry of readdirSync(partial)) {
+          if (entry.toLowerCase().endsWith(".msi")) {
+            rmSync(join(partial, entry), { force: true });
+          }
+        }
+      } else {
+        extractArchive(download, partial);
+      }
+      for (const entry of def.scrubEntries ?? []) {
+        rmSync(join(partial, entry), { recursive: true, force: true });
+      }
+      for (const copy of def.copyAfter ?? []) {
+        cpSync(join(partial, copy.from), join(partial, copy.to), {
+          recursive: true,
+          force: true,
+        });
+      }
       const exe = findFile(partial, def.exeName);
       if (!exe) return fail(name, `${def.exeName} not found in the archive`);
 

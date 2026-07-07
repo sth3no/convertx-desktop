@@ -7,10 +7,26 @@ export interface PackDef {
   url: string;
   sha256: string;
   sizeBytes: number;
-  /** Archive extractable by system bsdtar (zip/7z). */
-  kind: "zip";
+  /**
+   * "zip": any archive the system bsdtar reads (zip/7z).
+   * "msi-admin": a Windows Installer package extracted via
+   * `msiexec /a <msi> TARGETDIR=<dir> /qn` (no elevation, no install —
+   * empirically verified for LibreOffice, 2026-07-07).
+   */
+  kind: "zip" | "msi-admin";
   /** File that must exist after extraction; its dir joins the child PATH. */
   exeName: string;
+  /**
+   * Relative paths deleted after extraction — e.g. LibreOffice's online
+   * updater, which otherwise REWRITES the extracted tree in place (verified),
+   * and the stub MSI msiexec leaves in TARGETDIR.
+   */
+  scrubEntries?: string[];
+  /**
+   * Relative copies applied after extraction (cpSync recursive — dirs merge).
+   * E.g. LibreOffice needs System64's VC++ runtime DLLs next to soffice.
+   */
+  copyAfter?: { from: string; to: string }[];
   /** What the pack unlocks, for frontend display. */
   unlocks: string;
 }
@@ -23,6 +39,43 @@ export interface PackDef {
  * Pins recorded 2026-07-07.
  */
 export const PACK_REGISTRY: PackDef[] = [
+  {
+    name: "libreoffice",
+    title: "LibreOffice (office documents)",
+    description:
+      "Convert Word/Excel/PowerPoint, OpenDocument, and dozens of other office formats.",
+    version: "25.8.7",
+    // Permanent archive (never redirects, keeps every version); the 4-part
+    // dir is the release's final RC. Companion .msi.sha256 published upstream.
+    url: "https://downloadarchive.documentfoundation.org/libreoffice/old/25.8.7.1/win/x86_64/LibreOffice_25.8.7.1_Win_x86-64.msi",
+    sha256: "0a1b054ba1d565d3de3c16b2f5245c0cd336f7d86c21723cc1b85df7c4a911aa",
+    sizeBytes: 366235648,
+    kind: "msi-admin",
+    exeName: "soffice.com",
+    // The TDF online updater would REWRITE the extracted tree in place
+    // (breaking hash-pinned state and silently blocking headless conversions
+    // while staging — empirically verified 2026-07-07). Scrub it.
+    scrubEntries: ["update-settings.ini", "program/updater.exe"],
+    // VC++ runtime DLLs land in System64\, not next to soffice — copy them in
+    // so machines without the redist still run it.
+    copyAfter: [{ from: "System64", to: "program" }],
+    unlocks: "~41 office input formats (docx, xlsx, pptx, odt, …) via LibreOffice",
+  },
+  {
+    name: "inkscape",
+    title: "Inkscape (vector graphics)",
+    description: "Convert EMF/WMF and other vector formats; SVG editing pipeline.",
+    version: "1.4.4",
+    // inkscape.org media URL — the random suffix is upstream's; the full URL
+    // is pinned and stable per release, but NOT predictable for future
+    // versions (re-record on bump).
+    url: "https://media.inkscape.org/dl/resources/file/inkscape-1.4.4_2026-05-05_dcaf3e7-x64_mHK170m.7z",
+    sha256: "c4dbd64a92628abe7d7316c43f9325396e4d48417866027ee3d993d4f5b54c6a",
+    sizeBytes: 110359970,
+    kind: "zip",
+    exeName: "inkscape.com",
+    unlocks: "EMF/WMF and 15+ other vector formats via Inkscape",
+  },
   {
     name: "vips",
     title: "libvips (fast image processing)",

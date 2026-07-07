@@ -97,3 +97,53 @@ test("remove deletes the pack and restarts; unknown names error", async () => {
   expect(restarts).toHaveLength(2);
   expect((await packs.install("nope")).state).toBe("error");
 });
+
+test("scrubEntries and copyAfter apply after extraction, before the marker", async () => {
+  const { def, packsDir, restarts } = await fixture();
+  // The fixture zip contains tool-1.0/bin/fakepack.exe. Scrub tolerates
+  // missing paths; copyAfter duplicates the bin dir to a new root.
+  const withSteps = {
+    ...def,
+    scrubEntries: ["tool-1.0/does-not-matter.txt"],
+    copyAfter: [{ from: "tool-1.0/bin", to: "shimdir" }],
+  };
+  const packs = manager(withSteps, packsDir, restarts);
+  const result = await packs.install("fakepack");
+  expect(result.state).toBe("installed");
+  // exe exists in BOTH the original bin dir and the copied shimdir.
+  const { existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  expect(existsSync(join(packsDir, "fakepack", "shimdir", "fakepack.exe"))).toBe(true);
+  expect(existsSync(join(packsDir, "fakepack", "tool-1.0", "bin", "fakepack.exe"))).toBe(true);
+});
+
+test("msi-admin kind uses the injected extractor and removes stub MSIs", async () => {
+  const { def, packsDir, restarts } = await fixture();
+  const msiDef = { ...def, name: "fakemsi", kind: "msi-admin" as const };
+  const seen: { msi: string; target: string }[] = [];
+  const packs = createPackManager({
+    packsDir,
+    registry: [msiDef],
+    log: () => {},
+    restartConvertx: (reason) => {
+      restarts.push(reason);
+    },
+    msiExtract: (msiPath, targetDir) => {
+      seen.push({ msi: msiPath, target: targetDir });
+      // Fake administrative image: payload + the stub MSI msiexec leaves.
+      const { mkdirSync, writeFileSync } = require("node:fs") as typeof import("node:fs");
+      const { join } = require("node:path") as typeof import("node:path");
+      mkdirSync(join(targetDir, "program"), { recursive: true });
+      writeFileSync(join(targetDir, "program", "fakepack.exe"), "payload exe");
+      writeFileSync(join(targetDir, "fakemsi.download.msi"), "stub");
+    },
+  });
+  const result = await packs.install("fakemsi");
+  expect(result.state).toBe("installed");
+  expect(seen).toHaveLength(1);
+  expect(seen[0]!.msi.toLowerCase().endsWith(".download.msi")).toBe(true);
+  const { existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  expect(existsSync(join(packsDir, "fakemsi", "program", "fakepack.exe"))).toBe(true);
+  expect(existsSync(join(packsDir, "fakemsi", "fakemsi.download.msi"))).toBe(false);
+});
