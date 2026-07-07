@@ -102,6 +102,27 @@ async function main(): Promise<void> {
     const childPid1 = readLock(lockFile)!.convertxPid!;
     console.log(`OK convertx child pid recorded (${childPid1})`);
 
+    // Read-only probes of the local API surface (contract: docs/API.md).
+    const api = async (path: string) => {
+      const sep = path.includes("?") ? "&" : "?";
+      const res = await fetch(
+        `http://127.0.0.1:${lock1.controlPort}${path}${sep}token=${lock1.token}`,
+      );
+      if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+      return res.json();
+    };
+    const info = (await api("/info")) as { version?: string; convertx?: { status?: string } };
+    if (!info.version) throw new Error("/info missing version");
+    console.log(`OK /info (version ${info.version}, convertx ${info.convertx?.status})`);
+    const packList = (await api("/packs")) as unknown[];
+    if (!Array.isArray(packList) || packList.length < 2) throw new Error("/packs registry empty");
+    console.log(`OK /packs (${packList.length} packs listed)`);
+    const settingsBody = (await api("/settings")) as { autoDeleteHours?: number };
+    if (typeof settingsBody.autoDeleteHours !== "number") throw new Error("/settings malformed");
+    const update = (await api("/update/status")) as { state?: string };
+    if (!update.state) throw new Error("/update/status malformed");
+    console.log(`OK /settings + /update/status (update state: ${update.state})`);
+
     // 2. Second launch exits fast; first instance keeps the lock and stays healthy.
     const second = launch(base);
     await waitFor("second launch to exit", 20_000, () => second.exitCode !== null);
