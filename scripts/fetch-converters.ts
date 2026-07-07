@@ -1,15 +1,7 @@
-import { spawnSync } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  rmSync,
-  statSync,
-} from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { extractArchive, findFile } from "../src/shared/archive";
 import { sha256OfFile } from "./lib/checksums";
 import {
   CONVERTER_MANIFEST_PATH,
@@ -162,29 +154,6 @@ async function download(url: string, dest: string): Promise<void> {
   await Bun.write(dest, bytes);
 }
 
-/** Recursively find the first file named `name` under `dir`. */
-function findFile(dir: string, name: string): string | undefined {
-  for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry);
-    if (statSync(full).isDirectory()) {
-      const hit = findFile(full, name);
-      if (hit) return hit;
-    } else if (entry.toLowerCase() === name.toLowerCase()) {
-      return full;
-    }
-  }
-  return undefined;
-}
-
-function unzip(zipPath: string, destDir: string): void {
-  // Use the system bsdtar (libarchive) by absolute path — it extracts both .zip
-  // and .7z. A bare "tar" may resolve to Git-for-Windows' GNU tar, which cannot.
-  const systemTar = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
-  const tar = existsSync(systemTar) ? systemTar : "tar";
-  const result = spawnSync(tar, ["-xf", zipPath, "-C", destDir], { stdio: "inherit" });
-  if (result.status !== 0) throw new Error(`tar failed to extract ${zipPath}`);
-}
-
 /** Install a downloaded archive/binary into OUT_DIR per the tool's kind. */
 async function install(
   tool: Pick<PinnedTool, "name" | "kind" | "exeName" | "destSubdir">,
@@ -197,7 +166,7 @@ async function install(
   }
   const extractDir = join(tmp, tool.name);
   mkdirSync(extractDir, { recursive: true });
-  unzip(downloadPath, extractDir);
+  extractArchive(downloadPath, extractDir);
   const exePath = findFile(extractDir, tool.exeName);
   if (!exePath) throw new Error(`${tool.exeName} not found in ${tool.name} archive`);
   if (tool.destSubdir) {

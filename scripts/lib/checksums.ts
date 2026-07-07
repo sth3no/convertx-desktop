@@ -1,9 +1,2 @@
-import { createHash } from "node:crypto";
-
-export function sha256OfBytes(bytes: Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
-export async function sha256OfFile(path: string): Promise<string> {
-  return sha256OfBytes(new Uint8Array(await Bun.file(path).arrayBuffer()));
-}
+// Moved to src/shared so runtime engines can use it too; scripts keep this path.
+export { sha256OfBytes, sha256OfFile } from "../../src/shared/checksums";

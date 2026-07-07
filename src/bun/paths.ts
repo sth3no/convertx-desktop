@@ -13,6 +13,12 @@ export interface AppPaths {
   logsDir: string;
   /** Persisted window bounds + maximized flag. */
   windowStateFile: string;
+  /** Persisted user settings (src/bun/settings.ts). */
+  settingsFile: string;
+  /** Downloaded update installers (src/bun/updater.ts). */
+  updatesDir: string;
+  /** Installed optional converter packs (src/bun/packs.ts). */
+  packsDir: string;
 }
 
 /**
@@ -30,5 +36,8 @@ export function getAppPaths(
     jwtSecretFile: join(appDataDir, "jwt-secret"),
     logsDir: join(appDataDir, "logs"),
     windowStateFile: join(appDataDir, "window-state.json"),
+    settingsFile: join(appDataDir, "settings.json"),
+    updatesDir: join(appDataDir, "updates"),
+    packsDir: join(appDataDir, "packs"),
   };
 }
