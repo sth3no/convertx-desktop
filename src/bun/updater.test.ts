@@ -39,7 +39,8 @@ function fixture(installerBytes: Uint8Array, opts?: { badSum?: boolean; version?
           ],
         });
       }
-      if (path === `/dl/${name}`) return new Response(installerBytes);
+      // Cast: Bun accepts Uint8Array bodies; the TS lib type is narrower.
+      if (path === `/dl/${name}`) return new Response(installerBytes as unknown as BodyInit);
       if (path === "/dl/sums") return new Response(`${sum}  ${name}\n`);
       return new Response("nope", { status: 404 });
     },
@@ -103,6 +104,12 @@ test("hash mismatch -> error, never ready", async () => {
 test("API failure -> error state, check can be retried", async () => {
   const updater = makeUpdater("http://127.0.0.1:1");
   expect((await updater.check()).state).toBe("error");
+});
+
+test("404 (no published release yet) counts as up-to-date, not an error", async () => {
+  server = Bun.serve({ port: 0, fetch: () => new Response("not found", { status: 404 }) });
+  const updater = makeUpdater(`http://127.0.0.1:${server.port}`);
+  expect((await updater.check()).state).toBe("up-to-date");
 });
 
 test("apply is rejected unless ready; download rejected unless update-available", async () => {

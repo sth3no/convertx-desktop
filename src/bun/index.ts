@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BrowserWindow, PATHS, Screen, Utils } from "electrobun/bun";
+import pkg from "../../package.json";
 import { VENDOR_MANIFEST_NAME } from "../shared/vendor-spec";
 import { ensureConvertxCopy, pickVendorDir } from "./bundle";
-import { startControlServer, type ControlServer } from "./control";
+import { startControlServer, type ControlServer, type Route } from "./control";
 import {
   buildConvertxEnv,
   converterPathEntries,
@@ -24,8 +25,18 @@ import {
 } from "./instance";
 import { buildLinkInterceptorJs, isExternalUrl } from "./linkguard";
 import { createLogger } from "./logger";
+import { PACK_REGISTRY } from "./pack-registry";
+import { createPackManager } from "./packs";
 import { getAppPaths } from "./paths";
 import { resolvePort } from "./port";
+import {
+  DEFAULT_SETTINGS,
+  loadSettingsFile,
+  sanitizeSettings,
+  saveSettings,
+  type Settings,
+} from "./settings";
+import { createUpdater } from "./updater";
 import {
   clampToDisplays,
   loadWindowState,
@@ -73,6 +84,18 @@ background:#2a5aa0;color:#fff;cursor:pointer}button:disabled{background:#444;cur
 async function main(): Promise<void> {
   const paths = getAppPaths();
   const logger = createLogger(paths.logsDir);
+
+  // --- Settings (retention precedence: settings file > env override > default).
+  const loadedSettings = loadSettingsFile(paths.settingsFile);
+  let settings: Settings = loadedSettings.settings;
+  let settingsDirty = false;
+  const envHours = Number(process.env.CONVERTX_DESKTOP_AUTO_DELETE_HOURS);
+  const effectiveAutoDeleteHours = () =>
+    loadedSettings.fromFile || settingsDirty
+      ? settings.autoDeleteHours
+      : Number.isFinite(envHours) && envHours >= 0
+        ? envHours
+        : DEFAULT_SETTINGS.autoDeleteHours;
 
   // --- Single-instance gate. Runs before any app-data mutation, so two
   // --- racing launches can never fight over the convertx copy.
@@ -134,40 +157,15 @@ async function main(): Promise<void> {
     saveWindowState(paths.windowStateFile, pendingState);
   });
 
-  // --- Control server (focus / restart / open-external). Failure degrades:
-  // --- lock gets controlPort 0, a later launch treats us as stale.
-  let requestRestart: () => void = () => {};
-  let control: ControlServer;
-  try {
-    control = startControlServer({
-      handlers: {
-        onFocus: () => {
-          if (mainWindow.isMinimized()) mainWindow.unminimize();
-          mainWindow.activate();
-        },
-        onRestart: () => requestRestart(),
-        onOpenExternal: (url) => {
-          logger.log(`open external: ${url}`);
-          Utils.openExternal(url);
-        },
-      },
-    });
-  } catch (err) {
-    logger.log(`control server failed to start: ${err instanceof Error ? err.message : err}`);
-    control = { port: 0, token: "", stop: () => {} };
-  }
-  writeLock(lockFile, { pid: process.pid, controlPort: control.port, token: control.token });
-  const restartUrl =
-    control.port > 0
-      ? `http://127.0.0.1:${control.port}/restart?token=${control.token}`
-      : undefined;
-
   const setSplashStatus = (text: string) => {
     mainWindow.webview.executeJavascript(
       `window.__setSplashStatus && window.__setSplashStatus(${JSON.stringify(text)})`,
     );
   };
 
+  // restartUrl is known only after the control server starts; showError reads
+  // it at call time.
+  let restartUrl: string | undefined;
   const showError = (message: string) => {
     mainWindow.webview.loadHTML(errorPage(message, { logPath: logger.logPath, restartUrl }));
   };
@@ -198,6 +196,8 @@ async function main(): Promise<void> {
   let stopConvertX: (() => void) | undefined;
   let lastAutoRestartAt = 0;
   let starting = false;
+  let convertxState: "starting" | "running" | "error" = "starting";
+  let requestRestart: () => void = () => {};
 
   const cleanup = () => {
     stopConvertX?.();
@@ -214,10 +214,183 @@ async function main(): Promise<void> {
     process.exit(0);
   });
 
+  const restartConvertx = (reason: string) => {
+    logger.log(`convertx restart: ${reason}`);
+    stopConvertX?.();
+    stopConvertX = undefined;
+    mainWindow.webview.loadURL(SPLASH_URL);
+    void startServer().catch((err) => {
+      logger.log(`restart failed: ${err instanceof Error ? err.message : err}`);
+      showError(err instanceof Error ? (err.stack ?? err.message) : String(err));
+    });
+  };
+  requestRestart = () => restartConvertx("error-page button");
+
+  // --- Engines.
+  const packs = createPackManager({
+    packsDir: paths.packsDir,
+    registry: PACK_REGISTRY,
+    log: logger.log,
+    restartConvertx,
+  });
+
+  const updater = createUpdater({
+    currentVersion: pkg.version,
+    repo: "sth3no/convertx-desktop",
+    updatesDir: paths.updatesDir,
+    installedLauncher: join(
+      process.env.LOCALAPPDATA ?? "",
+      "Programs",
+      "ConvertX Desktop",
+      "bin",
+      "launcher.exe",
+    ),
+    log: logger.log,
+    quitApp: () => {
+      cleanup();
+      process.exit(0);
+    },
+  });
+
+  // --- API routes (contract: docs/API.md — keep the shapes in sync).
+  const routes: Route[] = [
+    {
+      method: "GET",
+      path: "/info",
+      handler: () => ({
+        body: {
+          app: "convertx-desktop",
+          version: pkg.version,
+          appOrigin,
+          convertx: {
+            status: convertxState,
+            port: appOrigin ? Number(new URL(appOrigin).port) : 0,
+          },
+          logPath: logger.logPath,
+        },
+      }),
+    },
+    { method: "GET", path: "/update/status", handler: () => ({ body: updater.status() }) },
+    { method: "POST", path: "/update/check", handler: async () => ({ body: await updater.check() }) },
+    {
+      method: "POST",
+      path: "/update/download",
+      handler: async () => ({ body: await updater.download() }),
+    },
+    {
+      method: "POST",
+      path: "/update/apply",
+      handler: async () => {
+        const result = await updater.apply();
+        return result.ok ? { body: { ok: true } } : { status: 409, body: { error: result.error } };
+      },
+    },
+    { method: "GET", path: "/packs", handler: () => ({ body: packs.list() }) },
+    {
+      method: "POST",
+      path: "/packs/install",
+      handler: (req) => {
+        const name = req.query.get("name") ?? "";
+        void packs.install(name); // async; the frontend polls GET /packs
+        return { status: 202, body: { started: name } };
+      },
+    },
+    {
+      method: "POST",
+      path: "/packs/remove",
+      handler: (req) => {
+        const name = req.query.get("name") ?? "";
+        void packs.remove(name);
+        return { status: 202, body: { started: name } };
+      },
+    },
+    { method: "GET", path: "/settings", handler: () => ({ body: settings }) },
+    {
+      method: "POST",
+      path: "/settings",
+      handler: async (req) => {
+        const patch = sanitizeSettings(await req.json());
+        if (Object.keys(patch).length === 0) {
+          return { status: 400, body: { error: "no valid settings in body" } };
+        }
+        settings = { ...settings, ...patch };
+        settingsDirty = true;
+        saveSettings(paths.settingsFile, settings);
+        const needsRestart = patch.autoDeleteHours !== undefined;
+        if (needsRestart) restartConvertx("settings changed");
+        return { body: { settings, restarted: needsRestart } };
+      },
+    },
+    {
+      method: "POST",
+      path: "/open-data-folder",
+      handler: () => {
+        const dataDir = join(paths.convertxDir, "data");
+        mkdirSync(dataDir, { recursive: true });
+        Utils.openPath(dataDir);
+        return { body: { ok: true } };
+      },
+    },
+    {
+      method: "GET",
+      path: "/logs/tail",
+      handler: (req) => {
+        const lines = Math.min(Number(req.query.get("lines")) || 100, 500);
+        let text = "";
+        try {
+          text = readFileSync(logger.logPath, "utf8");
+        } catch {
+          // no log yet
+        }
+        const all = text.trimEnd().split("\n");
+        return { body: { lines: all.slice(-lines) } };
+      },
+    },
+  ];
+
+  // --- Control server (focus / restart / open-external + the API routes).
+  // --- Failure degrades: lock gets controlPort 0, later launches treat us
+  // --- as stale.
+  let control: ControlServer;
+  try {
+    control = startControlServer({
+      handlers: {
+        onFocus: () => {
+          if (mainWindow.isMinimized()) mainWindow.unminimize();
+          mainWindow.activate();
+        },
+        onRestart: () => requestRestart(),
+        onOpenExternal: (url) => {
+          logger.log(`open external: ${url}`);
+          Utils.openExternal(url);
+        },
+      },
+      routes,
+      getCorsOrigin: () => appOrigin,
+    });
+  } catch (err) {
+    logger.log(`control server failed to start: ${err instanceof Error ? err.message : err}`);
+    control = { port: 0, token: "", stop: () => {} };
+  }
+  writeLock(lockFile, { pid: process.pid, controlPort: control.port, token: control.token });
+  restartUrl =
+    control.port > 0
+      ? `http://127.0.0.1:${control.port}/restart?token=${control.token}`
+      : undefined;
+
+  // Install a downloaded-and-verified update when the user quits (auto mode).
+  mainWindow.on("close", () => {
+    if (settings.updateMode === "auto" && updater.hasReadyUpdate()) {
+      logger.log("installing downloaded update on quit");
+      updater.applyOnQuit();
+    }
+  });
+
   async function startServer(): Promise<void> {
     if (starting) return;
     starting = true;
     try {
+      convertxState = "starting";
       setSplashStatus("Starting the converter…");
       const vendorDir = pickVendorDir([
         // Packaged bundle: vendor/ baked next to the app by scripts/bundle-vendor.ts.
@@ -253,8 +426,8 @@ async function main(): Promise<void> {
       const env = buildConvertxEnv({
         port,
         jwtSecret,
-        pathPrepend: converterPathEntries(convertersDir),
-        autoDeleteHours: process.env.CONVERTX_DESKTOP_AUTO_DELETE_HOURS,
+        pathPrepend: [...converterPathEntries(convertersDir), ...packs.installedPathEntries()],
+        autoDeleteHours: String(effectiveAutoDeleteHours()),
       });
 
       let rejectChildFailure: (err: Error) => void = () => {};
@@ -289,13 +462,15 @@ async function main(): Promise<void> {
         await Promise.race([waitForHealth(url), childFailure]);
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        convertxState = "error";
         logger.log(`boot failed: ${message}`);
         showError(`${message}\n\n--- ConvertX stderr ---\n${stderrTail || "(none)"}`);
         return;
       }
 
-      interceptorJs = buildLinkInterceptorJs(control.port, control.token, appOrigin);
+      interceptorJs = buildLinkInterceptorJs(control.port, control.token, appOrigin, pkg.version);
       mainWindow.webview.loadURL(url);
+      convertxState = "running";
       logger.log(`ConvertX ready at ${url}`);
       console.log(`ConvertX ready at ${url}`);
 
@@ -310,6 +485,7 @@ async function main(): Promise<void> {
           mainWindow.webview.loadURL(SPLASH_URL);
           void startServer();
         } else {
+          convertxState = "error";
           logger.log(`ConvertX died again within cooldown (${err.message}) — showing error page`);
           showError(
             `ConvertX stopped unexpectedly.\n${err.message}\n\n--- ConvertX stderr ---\n${stderrTail || "(none)"}`,
@@ -321,23 +497,17 @@ async function main(): Promise<void> {
     }
   }
 
-  requestRestart = () => {
-    logger.log("restart requested (error-page button)");
-    stopConvertX?.();
-    stopConvertX = undefined;
-    mainWindow.webview.loadURL(SPLASH_URL);
-    void startServer().catch((err) => {
-      logger.log(`restart failed: ${err instanceof Error ? err.message : err}`);
-      showError(err instanceof Error ? (err.stack ?? err.message) : String(err));
-    });
-  };
-
   await startServer().catch((err) => {
     const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    convertxState = "error";
     logger.log(`fatal boot error: ${message}`);
     console.error(message);
     showError(message);
   });
+
+  // Update checks start only after the first boot attempt, so a broken
+  // ConvertX never races an update download.
+  updater.start(() => settings.updateMode);
 }
 
 void main();

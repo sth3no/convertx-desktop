@@ -103,6 +103,12 @@ export function createUpdater(deps: UpdaterDeps) {
       const res = await fetchImpl(`${apiBase}/repos/${deps.repo}/releases/latest`, {
         headers: { "user-agent": "convertx-desktop", accept: "application/vnd.github+json" },
       });
+      if (res.status === 404) {
+        // No published release exists (drafts are invisible to the API) —
+        // there is nothing to update to, which is not an error.
+        status = { state: "up-to-date", checkedAt: Date.now() };
+        return status;
+      }
       if (!res.ok) return fail(`GitHub API ${res.status}`, "check");
       const data = (await res.json()) as {
         tag_name: string;

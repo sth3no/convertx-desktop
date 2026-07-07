@@ -25,11 +25,16 @@ export function isExternalUrl(url: string, appOrigin: string): boolean {
  * "simple request", so it reaches the (different-origin) control server even
  * though the page can't read the response — hence mode: "no-cors".
  * Idempotent via window.__cxLinkGuard: safe to re-inject on every navigation.
+ *
+ * Also exposes window.__convertxDesktop — the discovery mechanism for custom
+ * frontends: the control server's base URL, the per-run API token, and the
+ * app version. Full API contract: docs/API.md.
  */
 export function buildLinkInterceptorJs(
   controlPort: number,
   token: string,
   appOrigin: string,
+  appVersion: string,
 ): string {
   const controlBase = JSON.stringify(`http://127.0.0.1:${controlPort}`);
   const origin = JSON.stringify(appOrigin);
@@ -38,6 +43,11 @@ export function buildLinkInterceptorJs(
     "(() => {",
     "  if (window.__cxLinkGuard) return;",
     "  window.__cxLinkGuard = true;",
+    "  window.__convertxDesktop = Object.freeze({",
+    `    controlBase: ${controlBase},`,
+    `    token: ${tok},`,
+    `    version: ${JSON.stringify(appVersion)},`,
+    "  });",
     `  const appOrigin = ${origin};`,
     `  const controlBase = ${controlBase};`,
     `  const token = ${tok};`,

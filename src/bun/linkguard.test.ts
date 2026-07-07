@@ -19,7 +19,9 @@ test("isExternalUrl classifies app, external, and scheme URLs", () => {
 });
 
 test("buildLinkInterceptorJs embeds origin, control endpoint, and idempotence guard", () => {
-  const js = buildLinkInterceptorJs(54321, "tok-123", ORIGIN);
+  const js = buildLinkInterceptorJs(54321, "tok-123", ORIGIN, "9.9.9");
+  expect(js).toContain("__convertxDesktop");
+  expect(js).toContain('"9.9.9"');
   expect(js).toContain('"http://127.0.0.1:54321"');
   expect(js).toContain("tok-123");
   expect(js).toContain(JSON.stringify(ORIGIN));
