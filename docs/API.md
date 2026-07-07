@@ -64,6 +64,23 @@ Outside the webview (scripts, tests), read `%APPDATA%\ConvertX-Electrobun\instan
 | `POST /open-data-folder` | Reveal ConvertX's `data\` folder (uploads/outputs) in Explorer |
 | `GET /logs/tail?lines=N` | `{lines: string[]}` — last N log lines (default 100, max 500) |
 
+### Pending files ("Open with ConvertX")
+
+Files handed to the app — via file associations, drag-onto-exe, or a second
+launch with arguments — are queued by the shell. **The frontend owns the rest:**
+claim the paths and upload them through the ConvertX page session (the shell
+has no access to the page's cookies). Poll on load and on window focus.
+
+| Endpoint | Description |
+|---|---|
+| `GET /pending-files` | `{files: string[]}` — peek without draining |
+| `POST /pending-files/claim` | `{files: string[]}` — return and clear the queue |
+| `POST /enqueue-files` (body `{files: string[]}`) | Add absolute paths (existing files only); returns `{queued}` |
+
+Note for installer maintainers: association targets must invoke
+`"{app}\bin\bun.exe" "{app}\Resources\main.js" "%1"` — `launcher.exe` drops
+argv (verified; Electrobun #483).
+
 ### Updates
 
 | Endpoint | Description |
