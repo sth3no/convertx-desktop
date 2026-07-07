@@ -47,9 +47,11 @@ test("readLock returns undefined for missing or malformed files", () => {
 test("isLockAlive is true only for a live control server with matching pid", async () => {
   let focused = 0;
   control = startControlServer({
-    onFocus: () => focused++,
-    onRestart: () => {},
-    onOpenExternal: () => {},
+    handlers: {
+      onFocus: () => focused++,
+      onRestart: () => {},
+      onOpenExternal: () => {},
+    },
   });
   const live = { pid: process.pid, controlPort: control.port, token: control.token };
   expect(await isLockAlive(live)).toBe(true);

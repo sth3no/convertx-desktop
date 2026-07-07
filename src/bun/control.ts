@@ -8,6 +8,31 @@ export interface ControlHandlers {
   onOpenExternal: (url: string) => void;
 }
 
+export interface RouteRequest {
+  query: URLSearchParams;
+  /** Parses the JSON body; returns {} for an empty or invalid body. */
+  json: () => Promise<unknown>;
+}
+
+export interface RouteResult {
+  status?: number;
+  body: unknown;
+}
+
+export interface Route {
+  method: "GET" | "POST";
+  path: string;
+  handler: (req: RouteRequest) => RouteResult | Promise<RouteResult>;
+}
+
+export interface ControlServerOptions {
+  handlers: ControlHandlers;
+  /** Engine endpoints (update/packs/settings/info/...). */
+  routes?: Route[];
+  /** The webview app origin, once known — enables readable CORS responses. */
+  getCorsOrigin?: () => string;
+}
+
 export interface ControlServer {
   port: number;
   token: string;
@@ -15,42 +40,81 @@ export interface ControlServer {
 }
 
 /**
- * Loopback control server — the supervisor's command channel. Consumers:
- * a second app instance (/ping to verify the lock owner is really us —
- * immune to PID reuse — and /focus to raise the window), the error page's
- * Restart button (/restart), and the injected link interceptor
- * (/open-external). Every endpoint requires the per-run token.
+ * Loopback control server — the app's local JSON API. Token-authed (query
+ * param, per-run random), CORS-enabled for the ConvertX webview origin so a
+ * frontend running there can read responses. Built-in endpoints (/ping,
+ * /focus, /restart, /open-external) keep their Phase 1 shapes; engines add
+ * routes. The full frontend contract lives in docs/API.md.
  */
-export function startControlServer(handlers: ControlHandlers): ControlServer {
+export function startControlServer(options: ControlServerOptions): ControlServer {
+  const { handlers, routes = [], getCorsOrigin } = options;
   const token = randomUUID();
+
+  const corsHeaders = (): Record<string, string> => {
+    const origin = getCorsOrigin?.() ?? "";
+    return origin ? { "access-control-allow-origin": origin, vary: "Origin" } : {};
+  };
+  const json = (body: unknown, status = 200): Response =>
+    Response.json(body, { status, headers: corsHeaders() });
+
   const server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0,
-    fetch(req) {
+    async fetch(req) {
       const url = new URL(req.url);
-      if (url.searchParams.get("token") !== token) {
-        return new Response("forbidden", { status: 403 });
+      if (req.method === "OPTIONS") {
+        return new Response(null, {
+          status: 204,
+          headers: {
+            ...corsHeaders(),
+            "access-control-allow-methods": "GET, POST, OPTIONS",
+            "access-control-allow-headers": "content-type",
+          },
+        });
       }
+      if (url.searchParams.get("token") !== token) {
+        return json({ error: "forbidden" }, 403);
+      }
+
+      // Built-in endpoints (shapes relied on by instance.ts and the injected
+      // link interceptor — do not change).
       if (url.pathname === "/ping" && req.method === "GET") {
-        return Response.json({ app: CONTROL_APP_ID, pid: process.pid });
+        return json({ app: CONTROL_APP_ID, pid: process.pid });
       }
       if (url.pathname === "/focus" && req.method === "POST") {
         handlers.onFocus();
-        return Response.json({ ok: true });
+        return json({ ok: true });
       }
       if (url.pathname === "/restart" && req.method === "POST") {
         handlers.onRestart();
-        return Response.json({ ok: true });
+        return json({ ok: true });
       }
       if (url.pathname === "/open-external" && req.method === "POST") {
         const target = url.searchParams.get("url") ?? "";
         if (!/^(https?:\/\/|mailto:)/i.test(target)) {
-          return new Response("bad url", { status: 400 });
+          return json({ error: "bad url" }, 400);
         }
         handlers.onOpenExternal(target);
-        return Response.json({ ok: true });
+        return json({ ok: true });
       }
-      return new Response("not found", { status: 404 });
+
+      const route = routes.find((r) => r.path === url.pathname && r.method === req.method);
+      if (!route) return json({ error: "not found" }, 404);
+      try {
+        const result = await route.handler({
+          query: url.searchParams,
+          json: async () => {
+            try {
+              return await req.json();
+            } catch {
+              return {};
+            }
+          },
+        });
+        return json(result.body, result.status ?? 200);
+      } catch (err) {
+        return json({ error: err instanceof Error ? err.message : String(err) }, 500);
+      }
     },
   });
   const port = server.port;

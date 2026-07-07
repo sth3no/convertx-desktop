@@ -140,14 +140,16 @@ async function main(): Promise<void> {
   let control: ControlServer;
   try {
     control = startControlServer({
-      onFocus: () => {
-        if (mainWindow.isMinimized()) mainWindow.unminimize();
-        mainWindow.activate();
-      },
-      onRestart: () => requestRestart(),
-      onOpenExternal: (url) => {
-        logger.log(`open external: ${url}`);
-        Utils.openExternal(url);
+      handlers: {
+        onFocus: () => {
+          if (mainWindow.isMinimized()) mainWindow.unminimize();
+          mainWindow.activate();
+        },
+        onRestart: () => requestRestart(),
+        onOpenExternal: (url) => {
+          logger.log(`open external: ${url}`);
+          Utils.openExternal(url);
+        },
       },
     });
   } catch (err) {
