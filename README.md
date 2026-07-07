@@ -36,6 +36,11 @@ files, and an automatic refresh of the app-data ConvertX copy whenever the bundl
 browser. Converted files and history are kept for 7 days by default
 (`CONVERTX_DESKTOP_AUTO_DELETE_HOURS` overrides; `0` disables cleanup).
 
+The control server doubles as a **local JSON API** for building custom
+frontends — self-update, converter packs, settings, logs. See
+[docs/API.md](docs/API.md); pages in the app window get
+`window.__convertxDesktop` injected for discovery.
+
 ## Prerequisites (build machine)
 
 - [Bun](https://bun.sh) on `PATH` (developed with Bun 1.3.14)
