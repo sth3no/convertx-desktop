@@ -78,6 +78,28 @@ export async function isLockAlive(lock: InstanceLock, timeoutMs = 1500): Promise
   }
 }
 
+/**
+ * Forward file paths (from this launch's argv) to the running instance's
+ * pending-files queue. Best-effort — a lost handoff only means the user
+ * re-opens the file.
+ */
+export async function sendFiles(
+  lock: InstanceLock,
+  files: string[],
+  timeoutMs = 2000,
+): Promise<void> {
+  if (files.length === 0 || lock.controlPort <= 0) return;
+  try {
+    await fetch(`http://127.0.0.1:${lock.controlPort}/enqueue-files?token=${lock.token}`, {
+      method: "POST",
+      body: JSON.stringify({ files }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+  } catch {
+    // best-effort
+  }
+}
+
 /** Ask the running instance to raise its window. Best-effort. */
 export async function requestFocus(lock: InstanceLock, timeoutMs = 1500): Promise<void> {
   try {

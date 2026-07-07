@@ -11,6 +11,7 @@ import {
   reapStaleConvertx,
   removeLock,
   requestFocus,
+  sendFiles,
   updateLockChildPid,
   writeLock,
 } from "./instance";
@@ -106,4 +107,30 @@ test("reapStaleConvertx kills only verified bun.exe pids", () => {
   // No recorded child pid -> no kill.
   reapStaleConvertx({ pid: 1, controlPort: 0, token: "" }, (m) => logs.push(m), deps);
   expect(killed).toEqual([]);
+});
+
+test("sendFiles posts the launch's files to the running instance's queue route", async () => {
+  const received: string[][] = [];
+  control = startControlServer({
+    handlers: { onFocus: () => {}, onRestart: () => {}, onOpenExternal: () => {} },
+    routes: [
+      {
+        method: "POST",
+        path: "/enqueue-files",
+        handler: async (req) => {
+          const body = (await req.json()) as { files?: string[] };
+          received.push(body.files ?? []);
+          return { body: { queued: body.files?.length ?? 0 } };
+        },
+      },
+    ],
+  });
+  const lock = { pid: process.pid, controlPort: control.port, token: control.token };
+  await sendFiles(lock, ["C:/x/a.png", "C:/x/b.docx"]);
+  expect(received).toEqual([["C:/x/a.png", "C:/x/b.docx"]]);
+
+  // Empty list and dead ports are silent no-ops.
+  await sendFiles(lock, []);
+  await sendFiles({ pid: 1, controlPort: 0, token: "t" }, ["C:/x/a.png"]);
+  expect(received).toHaveLength(1);
 });

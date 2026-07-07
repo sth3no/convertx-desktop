@@ -1,6 +1,9 @@
+// MUST stay the first import: normalizes cwd before electrobun resolves its
+// cwd-relative Resources paths (see the file-handoff spec).
+import { ORIGINAL_CWD } from "./bootstrap-cwd";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { BrowserWindow, PATHS, Screen, Utils } from "electrobun/bun";
 import pkg from "../../package.json";
 import { VENDOR_MANIFEST_NAME } from "../shared/vendor-spec";
@@ -20,12 +23,15 @@ import {
   reapStaleConvertx,
   removeLock,
   requestFocus,
+  sendFiles,
   updateLockChildPid,
   writeLock,
 } from "./instance";
 import { buildLinkInterceptorJs, isExternalUrl } from "./linkguard";
 import { createLogger } from "./logger";
+import { getProcessCommandLineArgs } from "./native-argv";
 import { PACK_REGISTRY } from "./pack-registry";
+import { createPendingFiles, extractFileArgs } from "./pending-files";
 import { createPackManager } from "./packs";
 import { getAppPaths } from "./paths";
 import { resolvePort } from "./port";
@@ -97,11 +103,20 @@ async function main(): Promise<void> {
         ? envHours
         : DEFAULT_SETTINGS.autoDeleteHours;
 
+  // Files handed to this launch ("Open with", drag-onto-exe, CLI). The
+  // native command line, not process.argv — the supervisor runs as a Worker
+  // where argv is stripped (see native-argv.ts).
+  const launchFiles = extractFileArgs(getProcessCommandLineArgs(), ORIGINAL_CWD);
+  const pendingFiles = createPendingFiles();
+  if (launchFiles.length > 0) logger.log(`launch files: ${launchFiles.join(", ")}`);
+
   // --- Single-instance gate. Runs before any app-data mutation, so two
-  // --- racing launches can never fight over the convertx copy.
+  // --- racing launches can never fight over the convertx copy. A secondary
+  // --- launch hands its files to the running instance before exiting.
   const lockFile = lockFilePath(paths.appDataDir);
   const existing = readLock(lockFile);
   if (existing && (await isLockAlive(existing))) {
+    await sendFiles(existing, launchFiles);
     await requestFocus(existing);
     console.log("Another ConvertX instance is running — focused it and exiting.");
     process.exit(0);
@@ -110,6 +125,7 @@ async function main(): Promise<void> {
     logger.log(`stale instance lock found (pid ${existing.pid})`);
     reapStaleConvertx(existing, logger.log);
   }
+  pendingFiles.add(launchFiles);
 
   // --- Window, restored from persisted state and clamped to real displays.
   const savedState = clampToDisplays(
@@ -331,6 +347,25 @@ async function main(): Promise<void> {
         return { body: { ok: true } };
       },
     },
+    { method: "GET", path: "/pending-files", handler: () => ({ body: { files: pendingFiles.peek() } }) },
+    {
+      method: "POST",
+      path: "/pending-files/claim",
+      handler: () => ({ body: { files: pendingFiles.claim() } }),
+    },
+    {
+      method: "POST",
+      path: "/enqueue-files",
+      handler: async (req) => {
+        const body = (await req.json()) as { files?: unknown };
+        const files = Array.isArray(body.files)
+          ? body.files.filter((f): f is string => typeof f === "string")
+          : [];
+        const queued = pendingFiles.add(files);
+        if (queued > 0) logger.log(`files enqueued via API: ${queued}`);
+        return { body: { queued } };
+      },
+    },
     {
       method: "GET",
       path: "/logs/tail",
@@ -395,6 +430,9 @@ async function main(): Promise<void> {
       const vendorDir = pickVendorDir([
         // Packaged bundle: vendor/ baked next to the app by scripts/bundle-vendor.ts.
         join(PATHS.RESOURCES_FOLDER, "app", "vendor"),
+        // Same, derived from the executable path — independent of cwd (shell
+        // launches via file associations arrive with arbitrary cwds).
+        join(dirname(process.execPath), "..", "Resources", "app", "vendor"),
         // Dev (`bun run dev`): electrobun runs the launcher with cwd = the
         // bundle's bin dir; reach the project root from Resources.
         join(PATHS.RESOURCES_FOLDER, "..", "..", "..", "..", "vendor"),

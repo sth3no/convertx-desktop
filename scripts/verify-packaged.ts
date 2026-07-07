@@ -13,12 +13,13 @@
  *      the job object; its logic is unit-tested in src/bun/instance.test.ts.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const PROJECT_ROOT = import.meta.dir.replace(/[\\/]scripts$/, "");
-const LAUNCHER = join(PROJECT_ROOT, "build", "dev-win-x64", "ConvertX-dev", "bin", "launcher.exe");
+const BUNDLE = join(PROJECT_ROOT, "build", "dev-win-x64", "ConvertX-dev");
+const LAUNCHER = join(BUNDLE, "bin", "launcher.exe");
 
 interface Lock {
   pid: number;
@@ -75,6 +76,19 @@ function launch(appDataBase: string) {
   return spawn(LAUNCHER, [], {
     env: { ...process.env, APPDATA: appDataBase },
     stdio: "ignore",
+  });
+}
+
+/**
+ * Launch the supervisor DIRECTLY via bun.exe (the file-association path —
+ * launcher.exe drops argv, empirically verified). The deliberately foreign
+ * cwd exercises the bootstrap-cwd fix.
+ */
+function launchDirect(appDataBase: string, args: string[]) {
+  return spawn(join(BUNDLE, "bin", "bun.exe"), [join(BUNDLE, "Resources", "main.js"), ...args], {
+    env: { ...process.env, APPDATA: appDataBase },
+    stdio: "ignore",
+    cwd: tmpdir(),
   });
 }
 
@@ -143,13 +157,45 @@ async function main(): Promise<void> {
       throw new Error("hard kill unexpectedly removed the lock file — stale-lock path untested");
     }
 
-    launch(base);
-    await waitFor("relaunch healthy under a new pid (stale-lock takeover)", 120_000, async () => {
+    // 4. Relaunch DIRECTLY via bun.exe from a foreign cwd, with a file arg —
+    //    the file-association path. Must take over the stale lock, boot
+    //    healthy, and queue the file.
+    const handoffFile1 = join(base, "handoff-a.png");
+    writeFileSync(handoffFile1, "fake image");
+    launchDirect(base, [handoffFile1]);
+    await waitFor("direct relaunch healthy under a new pid (stale-lock takeover)", 120_000, async () => {
       const lock = readLock(lockFile);
       return !!lock && lock.pid !== lock1.pid && (await pingOk(lock));
     });
-    lastSupervisorPid = readLock(lockFile)!.pid;
-    console.log("OK relaunch took over the stale lock and reached healthy");
+    const lock2 = readLock(lockFile)!;
+    lastSupervisorPid = lock2.pid;
+    console.log("OK direct bun.exe launch from a foreign cwd took over and reached healthy");
+
+    const api2 = async (path: string) => {
+      const sep = path.includes("?") ? "&" : "?";
+      const res = await fetch(
+        `http://127.0.0.1:${lock2.controlPort}${path}${sep}token=${lock2.token}`,
+      );
+      if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+      return res.json();
+    };
+    const pending1 = (await api2("/pending-files")) as { files: string[] };
+    if (!pending1.files.includes(handoffFile1)) {
+      throw new Error(`launch file not queued: ${JSON.stringify(pending1)}`);
+    }
+    console.log("OK launch file arg landed in /pending-files");
+
+    // 5. A second direct launch with another file forwards it to the running
+    //    instance and exits.
+    const handoffFile2 = join(base, "handoff-b.docx");
+    writeFileSync(handoffFile2, "fake doc");
+    const secondDirect = launchDirect(base, [handoffFile2]);
+    await waitFor("second direct launch to exit", 20_000, () => secondDirect.exitCode !== null);
+    const pending2 = (await api2("/pending-files")) as { files: string[] };
+    if (!pending2.files.includes(handoffFile1) || !pending2.files.includes(handoffFile2)) {
+      throw new Error(`forwarded file missing: ${JSON.stringify(pending2)}`);
+    }
+    console.log("OK second launch forwarded its file to the running instance");
 
     console.log("\nVERIFY-PACKAGED PASSED");
   } finally {
