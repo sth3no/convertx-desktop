@@ -186,6 +186,21 @@ Everything in this plan fits the shell except two possible pressure points: hidi
 2. **Public repo name** — "ConvertX Desktop" or something more distinct from upstream?
 3. Any converter pack you'd promote into the *base* install (e.g. if office docs are your main use, LibreOffice could ship in the installer despite size)?
 
+## 8b. Handoff queue (ready-to-run plans, 2026-07-07)
+
+Self-contained implementation plans/runbooks with this session's verified research baked in — suited to Opus-class execution (or any competent executor) without re-derivation:
+
+| Plan | Blocker |
+|---|---|
+| `../plans/2026-07-07-tray-and-menu.md` | none |
+| `../plans/2026-07-07-conversion-notifications.md` | none |
+| `../plans/2026-07-07-settings-passthroughs.md` | none |
+| `../plans/2026-07-07-file-associations-installer.md` | none (plumbing shipped + verified) |
+| `../plans/2026-07-07-winget-and-housekeeping.md` | v1.0.0 must be published first |
+| `../plans/2026-07-07-signing-runbook.md` | user's signing-track decision |
+
+The frontend itself remains the user's domain; its contract is `docs/API.md`.
+
 ## 9. Process
 
 Execution order: Phase 0 → 1 → 2 → 3 → 4 → 5 (0∥1 parallelizable; signing acquisition starts now). Each phase: brainstorm → spec → plan → implement → smoke-gated merge, per the existing superpowers convention. This document gets updated (checkboxes per phase) as phases land.
